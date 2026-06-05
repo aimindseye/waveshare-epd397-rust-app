@@ -25,7 +25,7 @@ version=1
 theme=classic | high-contrast
 orientation=portrait | landscape
 font_size=small | medium | large | xlarge
-book_font=inter | atkinson-hyperlegible | serif
+book_font=inter | atkinson-hyperlegible | serif | literata
 paragraph_alignment=justified | left | center | right
 show_progress=true | false
 ```
@@ -38,9 +38,9 @@ Orientation, font size, and book font affect pagination and are included in TXT 
 
 Reading theme and progress visibility redraw the current page but do not invalidate page anchors.
 
-## Reader serif font
+## Reader e-ink font pack
 
-The Serif option uses generated printable-ASCII DejaVu Serif raster arrays in Small, Medium, Large, and XLarge sizes. Raw font files are not distributed. See `docs/licenses/DEJAVU-SERIF-NOTICE.txt`.
+The existing Serif option continues to use generated printable-ASCII DejaVu Serif raster arrays. The persisted `serif` key is unchanged. The persisted `atkinson-hyperlegible` key is also unchanged while its Reader-only raster source is upgraded to Atkinson Hyperlegible Next Medium. Literata is a new explicit option backed by generated Literata Medium strikes. Inter continues to reuse the UI-backed Reader strikes. Raw font files are not distributed. See `docs/READER_EINK_FONT_PACK.md`.
 
 ## v0.16.4 theme geometry rule
 

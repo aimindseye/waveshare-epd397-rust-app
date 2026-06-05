@@ -29,7 +29,7 @@ A TXT cache is accepted only when its fingerprint matches the book path, file si
 
 ## Deferred
 
-EPUB state anchors, EPUB TOC records and EPUB cache layouts remain deferred to the reflowable EPUB milestone.
+EPUB resume and bookmark records now reuse the same persisted byte-offset boundary against the bounded flattened EPUB text buffer. EPUB TOC rows remain session-owned and are regenerated from EPUB3 nav, EPUB2 NCX or the OPF spine when the EPUB opens. SD-backed EPUB anchor-cache persistence remains deferred.
 
 ## Reader preferences
 

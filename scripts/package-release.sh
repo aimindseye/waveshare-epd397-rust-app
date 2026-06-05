@@ -25,7 +25,10 @@ rsync -a ./ "$TMP/waveshare-epd397-rust-app/" \
   --exclude 'dist/' \
   --exclude '.DS_Store' \
   --exclude '__pycache__/' \
-  --exclude '*.pyc'
+  --exclude '*.pyc' \
+  --exclude '*.bak' \
+  --exclude '*.orig' \
+  --exclude '*.rej'
 
 rm -f "$OUT" "$OUT.sha256"
 (

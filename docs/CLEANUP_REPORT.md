@@ -66,3 +66,8 @@ The Reader persistence audit verifies every generated primary, `.TMP` and `.BAK`
 ## v0.16.8 Library bookmark-tab presentation alignment
 
 The Library Bookmarks tab now renders saved marks as title plus layout-aware `PAGE N` labels, reports `<n> saved / MARKS.TXT`, and suppresses the unrelated EPUB-placeholder note. The dedicated Bookmarks screen and Reader byte-anchor persistence remain unchanged.
+
+
+## v0.17.0 reflowable EPUB foundation
+
+Added `src/epub.rs` as a bounded EPUB-only module. The shared Reader now opens TXT and EPUB rows through staged first-page-first loading. EPUB parsing, OPF spine extraction, XHTML reflow and EPUB TOC generation remain isolated from sleep modules and from the accepted FAT 8.3 TXT cache path.

@@ -13,6 +13,7 @@ pub mod buttons;
 pub mod calendar;
 pub mod environment;
 pub mod epaper;
+pub mod epub;
 pub mod framebuffer;
 pub mod imu;
 pub mod network;

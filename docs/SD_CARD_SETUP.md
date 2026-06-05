@@ -103,7 +103,7 @@ Install the bundled samples only:
 
 ## Reader books
 
-Create `/RUSTMIX/BOOKS` and copy TXT books into it. v0.16.2 renders `.TXT` books and recognizes `.EPUB` / `.EPU` entries as placeholders for the reflowable EPUB milestone.
+Create `/RUSTMIX/BOOKS` and copy TXT or ordinary reflowable EPUB books into it. v0.17.0 renders `.TXT`, `.EPUB`, and FAT-friendly `.EPU` books. EPUB CSS layout, images, DRM and fixed-layout packages remain deferred.
 
 
 ## Reader-owned state

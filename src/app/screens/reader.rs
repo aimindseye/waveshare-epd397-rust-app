@@ -1,4 +1,4 @@
-//! Reader landing, library, bookmarks, loading, TXT page and options screens.
+//! Reader landing, library, bookmarks, loading, TXT / EPUB page, TOC and options screens.
 
 use core::convert::Infallible;
 
@@ -34,7 +34,7 @@ pub fn render_continue_reading(
         display,
         state.display,
         "CONTINUE READING",
-        "PERSISTENT TXT RESUME",
+        "PERSISTENT BOOK RESUME",
     )?;
     let heading = state.display.heading_style();
     let body = state.display.body_style();
@@ -94,12 +94,7 @@ pub fn render_library(
     let reader = &state.reader;
     let body = state.display.body_style();
     let detail = state.display.detail_style();
-    draw_header(
-        display,
-        state.display,
-        "LIBRARY",
-        "TXT NOW / EPUB READY ARCHITECTURE",
-    )?;
+    draw_header(display, state.display, "LIBRARY", "TXT / REFLOWABLE EPUB")?;
     let status = library_status(reader.library_tab, reader.visible_entries().len());
     draw_status_row(
         display,
@@ -128,9 +123,9 @@ pub fn render_library(
             .library_error
             .as_deref()
             .unwrap_or(match reader.library_tab {
-                ReaderLibraryTab::Recent => "No recent TXT books yet.",
+                ReaderLibraryTab::Recent => "No recent books yet.",
                 ReaderLibraryTab::Bookmarks => "No saved bookmarks yet.",
-                _ => "Copy TXT books into /RUSTMIX/BOOKS.",
+                _ => "Copy TXT or EPUB books into /RUSTMIX/BOOKS.",
             });
         Text::new(&truncate(message, 54), Point::new(26, 302), body).draw(display)?;
     }
@@ -149,7 +144,7 @@ pub fn render_library(
     }
     if reader.library_tab != ReaderLibraryTab::Bookmarks {
         Text::new(
-            "TXT opens now. EPUB rows are reserved for v0.17.0.",
+            "TXT and EPUB open with staged first-page loading.",
             Point::new(24, 716),
             detail,
         )
@@ -200,18 +195,42 @@ fn library_entry_columns(
             .location
             .as_ref()
             .map_or(1, |bookmark| reader.bookmark_display_page(bookmark));
-        LibraryEntryColumns {
-            badge: "PAGE".into(),
-            suffix: page.to_string(),
+        if let Some(chapter) = entry
+            .location
+            .as_ref()
+            .and_then(|bookmark| reader.bookmark_display_chapter_page(bookmark))
+        {
+            LibraryEntryColumns {
+                badge: format!("CH {}", chapter.chapter_number),
+                suffix: format!("P {}", chapter.page_text()),
+            }
+        } else {
+            LibraryEntryColumns {
+                badge: "PAGE".into(),
+                suffix: page.to_string(),
+            }
         }
     } else {
         LibraryEntryColumns {
             badge: entry.book.format.badge().into(),
-            suffix: if entry.book.format == BookFormat::Text {
-                "OPEN".into()
-            } else {
-                "NEXT".into()
-            },
+            suffix: "OPEN".into(),
+        }
+    }
+}
+
+fn bookmark_entry_columns(
+    reader: &crate::reader::ReaderUiState,
+    bookmark: &crate::reader::ReaderLocation,
+) -> LibraryEntryColumns {
+    if let Some(chapter) = reader.bookmark_display_chapter_page(bookmark) {
+        LibraryEntryColumns {
+            badge: format!("CH {}", chapter.chapter_number),
+            suffix: format!("P {}", chapter.page_text()),
+        }
+    } else {
+        LibraryEntryColumns {
+            badge: "PAGE".into(),
+            suffix: reader.bookmark_display_page(bookmark).to_string(),
         }
     }
 }
@@ -244,7 +263,7 @@ pub fn render_bookmarks(
         )
         .draw(display)?;
         Text::new(
-            "Open a TXT page, choose Reader Options,",
+            "Open a Reader page, choose Reader Options,",
             Point::new(24, 264),
             body,
         )
@@ -258,14 +277,15 @@ pub fn render_bookmarks(
     } else {
         for (index, bookmark) in state.reader.bookmarks.iter().take(8).enumerate() {
             let top = 164 + index as i32 * 64;
+            let columns = bookmark_entry_columns(&state.reader, bookmark);
             draw_row(
                 display,
                 state,
                 top,
                 state.reader.bookmarks_selected == index,
                 &truncate(&bookmark.title, 23),
-                "PAGE",
-                &state.reader.bookmark_display_page(bookmark).to_string(),
+                columns.badge.as_str(),
+                columns.suffix.as_str(),
             )?;
         }
     }
@@ -338,7 +358,11 @@ pub fn render_page(
     )
     .draw(display)?;
     Text::new(
-        "TXT READER",
+        if session.book.format == BookFormat::Text {
+            "TXT READER"
+        } else {
+            "EPUB REFLOWABLE"
+        },
         Point::new(18, if landscape { 48 } else { 60 }),
         state.display.header_subtitle_style(),
     )
@@ -354,13 +378,17 @@ pub fn render_page(
     let marked = state.reader.current_page_is_bookmarked();
     if state.reader.preferences.show_progress {
         Text::new(
-            session.encoding.label(),
+            if session.book.format == BookFormat::Text {
+                session.encoding.label()
+            } else {
+                "EPUB"
+            },
             Point::new(24, status_baseline),
             ui_body,
         )
         .draw(display)?;
         Text::new(
-            &format!("PAGE {}", session.page_label()),
+            &session.display_page_label(),
             Point::new(if landscape { 274 } else { 176 }, status_baseline),
             ui_body,
         )
@@ -384,7 +412,7 @@ pub fn render_page(
         )
         .draw(display)?;
         Text::new(
-            "TXT",
+            session.content_badge(),
             Point::new(if landscape { 370 } else { 210 }, status_baseline),
             ui_body,
         )
@@ -512,17 +540,13 @@ pub fn render_options(
     display: &mut OrientedFrameBuffer<'_>,
     state: &AppState,
 ) -> Result<(), Infallible> {
-    draw_header(
-        display,
-        state.display,
-        "READER OPTIONS",
-        "TXT READER ACTIONS",
-    )?;
+    draw_header(display, state.display, "READER OPTIONS", "READER ACTIONS")?;
     for (index, option) in ReaderOption::ALL.iter().copied().enumerate() {
         let badge = match option {
             ReaderOption::Bookmark if state.reader.current_page_is_bookmarked() => "REMOVE",
             ReaderOption::Bookmark => "ADD",
             ReaderOption::Bookmarks => "LIST",
+            ReaderOption::TableOfContents if state.reader.has_structured_toc() => "LIST",
             _ => option.badge(),
         };
         draw_row(
@@ -589,30 +613,61 @@ pub fn render_toc(
         display,
         state.display,
         "TABLE OF CONTENTS",
-        "TXT FOUNDATION",
+        if state.reader.has_structured_toc() {
+            "EPUB NAVIGATION"
+        } else {
+            "TXT FOUNDATION"
+        },
     )?;
     let heading = state.display.heading_style();
     let body = state.display.body_style();
-    Text::new("No structured TOC", Point::new(24, 200), heading).draw(display)?;
-    Text::new(
-        "Ordinary TXT files do not provide a formal",
-        Point::new(24, 258),
-        body,
-    )
-    .draw(display)?;
-    Text::new(
-        "table of contents. EPUB TOC support lands",
-        Point::new(24, 300),
-        body,
-    )
-    .draw(display)?;
-    Text::new(
-        "with the reflowable EPUB milestone.",
-        Point::new(24, 342),
-        body,
-    )
-    .draw(display)?;
-    draw_footer(display, state.display, "HOLD BOOT BACK")
+    let toc = state.reader.toc_entries();
+    if toc.is_empty() {
+        Text::new("No structured TOC", Point::new(24, 200), heading).draw(display)?;
+        Text::new(
+            "Ordinary TXT files do not provide a formal",
+            Point::new(24, 258),
+            body,
+        )
+        .draw(display)?;
+        Text::new(
+            "table of contents. EPUB books expose their",
+            Point::new(24, 300),
+            body,
+        )
+        .draw(display)?;
+        Text::new(
+            "navigation entries on this screen.",
+            Point::new(24, 342),
+            body,
+        )
+        .draw(display)?;
+        return draw_footer(display, state.display, "HOLD BOOT BACK");
+    }
+
+    draw_status_row(
+        display,
+        state.display,
+        StatusRow {
+            left: "EPUB TOC",
+            middle: &format!("{} entries", toc.len()),
+            right: "SELECT OPEN",
+        },
+    )?;
+    let first = state.reader.toc_selected.saturating_sub(7);
+    for (row, entry) in toc.iter().skip(first).take(8).enumerate() {
+        let index = first + row;
+        draw_row(
+            display,
+            state,
+            166 + row as i32 * 64,
+            state.reader.toc_selected == index,
+            &truncate(&entry.label, 27),
+            "CH",
+            &(entry.spine_index + 1).to_string(),
+        )?;
+    }
+    draw_footer(display, state.display, "MOVE  SELECT OPEN  HOLD BOOT BACK")
 }
 
 fn aligned_reader_line(
@@ -748,8 +803,8 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        aligned_reader_line, library_entry_columns, library_status, render_bookmarks,
-        render_continue_reading, render_library, render_loading, render_options,
+        aligned_reader_line, bookmark_entry_columns, library_entry_columns, library_status,
+        render_bookmarks, render_continue_reading, render_library, render_loading, render_options,
         render_preferences, render_toc, ReaderBodyGeometry,
     };
     use crate::{
@@ -757,8 +812,8 @@ mod tests {
         framebuffer::FrameBuffer,
         orientation::OrientedFrameBuffer,
         reader::{
-            BookFormat, ParagraphAlignment, PendingReaderOpen, ReaderBook, ReaderLibraryEntry,
-            ReaderLibraryTab, ReaderLoadingStage, ReaderLocation,
+            BookFormat, ParagraphAlignment, PendingReaderOpen, ReaderBook, ReaderChapterPageLabel,
+            ReaderLibraryEntry, ReaderLibraryTab, ReaderLoadingStage, ReaderLocation,
         },
     };
 
@@ -783,6 +838,7 @@ mod tests {
             modified_seconds: 456,
             byte_offset: 789,
             page_index: 11,
+            epub_chapter: None,
         };
         let mut reader = crate::reader::ReaderUiState::default();
         reader.library_tab = ReaderLibraryTab::Bookmarks;
@@ -803,6 +859,31 @@ mod tests {
             super::LibraryEntryColumns {
                 badge: "PAGE".into(),
                 suffix: "12".into(),
+            }
+        );
+    }
+    #[test]
+    fn epub_bookmark_columns_show_chapter_and_chapter_page_total() {
+        let bookmark = ReaderLocation {
+            path: "NOVEL.EPU".into(),
+            title: "Novel".into(),
+            format: BookFormat::Epub,
+            size_bytes: 123,
+            modified_seconds: 456,
+            byte_offset: 789,
+            page_index: 11,
+            epub_chapter: Some(ReaderChapterPageLabel {
+                chapter_number: 4,
+                page_number: 3,
+                page_count: 12,
+            }),
+        };
+        let reader = crate::reader::ReaderUiState::default();
+        assert_eq!(
+            bookmark_entry_columns(&reader, &bookmark),
+            super::LibraryEntryColumns {
+                badge: "CH 4".into(),
+                suffix: "P 3/12".into(),
             }
         );
     }
@@ -853,6 +934,7 @@ mod tests {
             },
             stage: ReaderLoadingStage::OpeningFile,
             encoding: None,
+            epub_document: None,
             resume: None,
             message: "Preparing".into(),
         });

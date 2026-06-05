@@ -1,14 +1,19 @@
 //! Reader-specific body typography.
 //!
 //! Reader pages deliberately use an independent font preference boundary so
-//! global UI typography remains stable. Inter and Atkinson reuse the existing
-//! UI strikes; Serif uses generated printable-ASCII DejaVu Serif bitmap
-//! strikes. TXT normalization converts unsupported punctuation before layout.
+//! global UI typography remains stable. Inter reuses the existing UI strike;
+//! Atkinson Hyperlegible Next Medium, DejaVu Serif and Literata Medium use
+//! generated printable-ASCII Reader-only bitmap strikes. TXT normalization
+//! converts unsupported punctuation before layout.
 
 use embedded_graphics::pixelcolor::BinaryColor;
 
 use super::{
     display::{UiFontFamily, UiFontSize},
+    reader_atkinson_next_assets::{
+        ATKINSON_NEXT_LARGE, ATKINSON_NEXT_MEDIUM, ATKINSON_NEXT_SMALL, ATKINSON_NEXT_XLARGE,
+    },
+    reader_literata_assets::{LITERATA_LARGE, LITERATA_MEDIUM, LITERATA_SMALL, LITERATA_XLARGE},
     reader_serif_assets::{SERIF_LARGE, SERIF_MEDIUM, SERIF_SMALL, SERIF_XLARGE},
     typography::{style_for, UiTextRole, UiTextStyle},
 };
@@ -28,13 +33,11 @@ pub const fn reader_body_style(
             ui_role(size),
             BinaryColor::On,
         ),
-        BookFont::AtkinsonHyperlegible => style_for(
-            UiFontFamily::AtkinsonHyperlegible,
-            ui_profile(size),
-            ui_role(size),
-            BinaryColor::On,
-        ),
+        BookFont::AtkinsonHyperlegible => {
+            UiTextStyle::new(atkinson_next_font(size), BinaryColor::On)
+        }
         BookFont::Serif => UiTextStyle::new(serif_font(size), BinaryColor::On),
+        BookFont::Literata => UiTextStyle::new(literata_font(size), BinaryColor::On),
     }
 }
 
@@ -56,12 +59,32 @@ const fn ui_role(size: BookFontSize) -> UiTextRole {
 }
 
 #[must_use]
+const fn atkinson_next_font(size: BookFontSize) -> &'static super::typography::BitmapFont {
+    match size {
+        BookFontSize::Small => &ATKINSON_NEXT_SMALL,
+        BookFontSize::Medium => &ATKINSON_NEXT_MEDIUM,
+        BookFontSize::Large => &ATKINSON_NEXT_LARGE,
+        BookFontSize::XLarge => &ATKINSON_NEXT_XLARGE,
+    }
+}
+
+#[must_use]
 const fn serif_font(size: BookFontSize) -> &'static super::typography::BitmapFont {
     match size {
         BookFontSize::Small => &SERIF_SMALL,
         BookFontSize::Medium => &SERIF_MEDIUM,
         BookFontSize::Large => &SERIF_LARGE,
         BookFontSize::XLarge => &SERIF_XLARGE,
+    }
+}
+
+#[must_use]
+const fn literata_font(size: BookFontSize) -> &'static super::typography::BitmapFont {
+    match size {
+        BookFontSize::Small => &LITERATA_SMALL,
+        BookFontSize::Medium => &LITERATA_MEDIUM,
+        BookFontSize::Large => &LITERATA_LARGE,
+        BookFontSize::XLarge => &LITERATA_XLARGE,
     }
 }
 
@@ -76,6 +99,7 @@ mod tests {
             BookFont::Inter,
             BookFont::AtkinsonHyperlegible,
             BookFont::Serif,
+            BookFont::Literata,
         ] {
             for size in [
                 BookFontSize::Small,

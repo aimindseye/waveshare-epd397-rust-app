@@ -1,7 +1,7 @@
-# RustMix Wave v0.16.4 consolidated physical smoke test
+# RustMix Wave v0.17.0 consolidated physical smoke test
 
 1. Validate, host-test, build and flash the firmware.
-2. Confirm `version=0.16.8 milestone=library-bookmark-tab-rendering-alignment`.
+2. Confirm `version=0.17.0 milestone=reflowable-epub-foundation`.
 3. Copy at least one TXT book into `/RUSTMIX/BOOKS`.
 4. Open `Reader > Library`, open the TXT file and confirm the staged loading screen appears before page one.
 5. Advance at least two pages and return to Home. Reboot the device.
@@ -35,4 +35,12 @@ Run `docs/V0.16.4-PHYSICAL-SMOKE-TEST.md` after flashing v0.16.4.
 - Confirm each row renders `PAGE N`, including distinct numbers for multiple marks from the same book.
 - Select each Library bookmark row and confirm it opens the explicit saved passage.
 - Cycle back to Books and Files and confirm rows still render `TXT / OPEN`.
-- Confirm the EPUB-placeholder note is absent on Bookmarks but remains present on Books and Files.
+- Confirm the unrelated EPUB note is absent on Bookmarks while Books and Files retain the EPUB-ready library guidance.
+
+
+## Reflowable EPUB foundation
+
+- Confirm `.EPUB` or `.EPU` rows display `EPUB / OPEN`.
+- Confirm archive, package, spine and first-page loading boundaries are visible.
+- Confirm EPUB page navigation, Continue Reading, bookmarks and TOC selection.
+- Confirm TXT behavior and Power-key sleep restoration remain unchanged.

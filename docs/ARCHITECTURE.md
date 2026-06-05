@@ -106,9 +106,11 @@ Retry waits are event-loop scheduled rather than implemented as blocking delays.
 Display preferences are a narrow exception: `src/app/display.rs` reads and writes only `/sdcard/RUSTMIX/DISPLAY.TXT`. Reader state is a second narrow exception: `src/reader.rs` writes only bounded files below `/sdcard/RUSTMIX/READER`.
 
 
-### Reader TXT persistence and bookmarks
+### Reader TXT / EPUB persistence and bookmarks
 
-`src/reader.rs` owns the bounded Reader domain: `/sdcard/RUSTMIX/BOOKS` scanning, TXT / EPUB-placeholder classification, encoding detection, staged first-page-first open, lazy byte-anchor pagination, nearby-page RAM cache, persistent Continue Reading, Recent and bookmarks. Reader-owned state lives below `/sdcard/RUSTMIX/READER`; `.TMP` and `.BAK` siblings provide interrupted-write recovery, while `CACHE/<8HEX>.CCH` retains bounded TXT anchors with fingerprint validation. `src/app/screens/reader.rs` renders Reader landing, Library tabs, the loading progress screen, text pages, bookmark lists, options and the TXT TOC placeholder. EPUB parsing remains an isolated follow-on milestone.
+`src/reader.rs` owns the bounded shared Reader domain: `/sdcard/RUSTMIX/BOOKS` scanning, TXT / EPUB classification, staged first-page-first opening, lazy byte-anchor pagination, nearby-page RAM cache, persistent Continue Reading, Recent and bookmarks. Reader-owned state lives below `/sdcard/RUSTMIX/READER`; `.TMP` and `.BAK` siblings provide interrupted-write recovery, while `CACHE/<8HEX>.CCH` retains bounded TXT anchors with fingerprint validation.
+
+`src/epub.rs` is an isolated EPUB boundary. It parses a bounded ZIP central directory, extracts stored or DEFLATE members, resolves `META-INF/container.xml`, parses the OPF manifest and spine, flattens XHTML into a bounded UTF-8 reflow buffer and produces EPUB3-nav, EPUB2-NCX or spine-derived TOC rows. `src/app/screens/reader.rs` renders the shared TXT / EPUB reading page and a real EPUB TOC list while preserving the TXT TOC `NONE` screen.
 
 
 ## Reader preference and typography boundary

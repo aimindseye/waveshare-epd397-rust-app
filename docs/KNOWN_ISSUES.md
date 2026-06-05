@@ -31,7 +31,7 @@ Audio playback is active, but microphone RX capture is deferred. `Productivity >
 
 ## Deferred applications and Reader work
 
-Reader TXT opening, Continue Reading, Recent and bookmarks are active. Deferred Reader work includes reflowable EPUB opening, EPUB TOC parsing and Reader preference profiles. The remaining placeholder apps are:
+Reader TXT and bounded reflowable EPUB opening, Continue Reading, Recent, bookmarks, Reader Preferences and EPUB TOC navigation are active. Deferred Reader work includes EPUB CSS layout, images, hyperlinks, footnotes, fixed-layout EPUB, DRM and SD-backed EPUB anchor caches. The remaining placeholder apps are:
 
 - Dictionary
 - Games TBD

@@ -38,7 +38,7 @@ pub struct AppState {
     pub calendar: CalendarUiState,
     /// Offline fixed-point Unit Converter cursor and editable field.
     pub unit_converter: UnitConverterUiState,
-    /// TXT Reader library, staged opening, RAM cache and option shell.
+    /// TXT / reflowable EPUB Reader library, staged opening, RAM cache and options.
     pub reader: ReaderUiState,
     pub partial_refreshes: u8,
     pub panel_awake: bool,
@@ -307,7 +307,15 @@ impl AppState {
                     self.router.navigate_to(ScreenRoute::ReaderLoading);
                 }
             }
-            ScreenRoute::ReaderToc | ScreenRoute::ReaderLoading => {}
+            ScreenRoute::ReaderToc => {
+                if event == ButtonEvent::Select {
+                    self.note_select_press();
+                }
+                if self.reader.apply_toc_button(event) {
+                    self.router.navigate_to(ScreenRoute::ReaderPage);
+                }
+            }
+            ScreenRoute::ReaderLoading => {}
             ScreenRoute::ReaderPage => match event {
                 ButtonEvent::Up => self.reader.previous_page(),
                 ButtonEvent::Down => self.reader.next_page(),
@@ -329,6 +337,7 @@ impl AppState {
                             self.router.navigate_to(ScreenRoute::ReaderBookmarks);
                         }
                         ReaderOption::TableOfContents => {
+                            self.reader.toc_selected = 0;
                             self.router.navigate_to(ScreenRoute::ReaderToc)
                         }
                         ReaderOption::ReadingPreferences => {

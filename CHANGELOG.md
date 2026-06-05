@@ -1,3 +1,56 @@
+# Changelog
+
+## v0.17.2 — Reader E-Ink Font Pack
+
+- Preserve the existing Inter, `serif`, and `atkinson-hyperlegible` Reader preference contracts.
+- Upgrade the Reader-only Atkinson raster source to Atkinson Hyperlegible Next Medium without renaming its persisted key.
+- Add Literata Medium as a new explicit `literata` Reader font option.
+- Keep raw TTF, OTF, WOFF, and WOFF2 files out of the repository; embed printable-ASCII generated Rust arrays only.
+- Keep selected font in the existing layout cache fingerprint and staged layout-rebuild route.
+- Rebuild chapter-aware EPUB page totals after font changes while preserving byte-offset bookmark anchors.
+- Keep TXT and EPUB font behavior aligned.
+
+## v0.17.1 — EPUB Watchdog and Memory-Pressure Repair
+
+- Added cooperative 1 ms pauses after every four chapter-page anchors so large EPUB first-page indexing lets the ESP-IDF idle task feed its watchdog.
+- Persisted and released the active Reader session before opening another book, preventing the previous flattened EPUB document from overlapping the next parser-worker allocation.
+- Moved EPUB documents into layout rebuilds instead of cloning their flattened text buffers.
+- Removed the full-document clone previously used for EPUB TOC jumps.
+- Reduced metadata-only OPF-title worker stacks from 64 KB to 32 KB while preserving the accepted 64 KB full EPUB parser-worker budget.
+- Added runtime markers, source-contract guards and physical smoke-test guidance for watchdog-free repeated EPUB opens.
+- Preserved TXT behavior, chapter-aware page labels, chapter-aware bookmarks, OPF Library titles, FAT 8.3 persistence, sleep images and network suspension.
+
+## v0.17.1 — EPUB Chapter-Aware Presentation
+
+- Added readable EPUB chapter boundaries alongside the flattened UTF-8 document.
+- Pre-indexed bounded chapter-relative EPUB page anchors for `CH n  PAGE x/y` Reader labels.
+- Persisted optional EPUB chapter/page labels in `MARKS.TXT`, while retaining backward compatibility with seven-field TXT and legacy records.
+- Rendered EPUB bookmarks as `CH n` plus `P x/y` in Library and Bookmarks screens.
+- Resolved OPF metadata titles on the existing bounded EPUB worker stack for Books and Files Library rows, with FAT filename fallback.
+- Preserved the accepted TXT Reader, FAT 8.3 state files, bookmark byte-offset authority, preferences, layout rebuild flow and parser stack isolation.
+
+## v0.17.0 — EPUB Parser Stack Isolation Repair
+
+- Moved EPUB archive parsing, DEFLATE expansion and XHTML flattening off the 16 KB firmware main task.
+- Added a short-lived `epub-parser` worker with an explicit 64 KB stack and synchronous join boundary.
+- Kept staged Reader loading, TXT rendering, FAT 8.3 persistence, bookmarks, preferences, sleep images and network suspension unchanged.
+- Added host and repository-contract guards for the worker boundary and stack budget.
+
+## v0.17.0 — Reflowable EPUB Foundation
+
+- Repaired quoted XML attribute scanning after opening element names so valid `container.xml` rootfiles resolve correctly.
+- Added EPUB tokenizer and plural-wrapper regression tests.
+- Restored validator-required v0.16.4–v0.16.8 physical smoke-test records.
+- Removed patch backup residue, added a source backup-artifact contract guard and excluded backup files from release ZIPs.
+- Removed unused EPUB imports from the Reader host-test module.
+- Activated `.EPUB` and FAT-friendly `.EPU` rows in Reader > Library.
+- Added bounded ZIP central-directory parsing with stored and DEFLATE member extraction.
+- Added `META-INF/container.xml`, OPF manifest, OPF spine and XHTML text extraction.
+- Reflowed EPUB chapter text through the accepted Reader typography, orientation, High Contrast and paragraph-alignment pipeline.
+- Added EPUB3 nav, EPUB2 NCX and spine-derived TOC rows under Reader Options > Table of Contents.
+- Reused Continue Reading, Recent, bookmarks, per-book resume and byte-offset authority for unchanged EPUB source files.
+- Preserved TXT SD-backed FAT 8.3 anchor caches and Power-key network-suspended sleep.
+
 ## v0.16.8 — Library Bookmark Tab Rendering Alignment
 
 - Aligned `Reader > Library > Bookmarks` with the dedicated Bookmarks screen.

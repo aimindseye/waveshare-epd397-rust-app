@@ -2,7 +2,7 @@
 
 RustMix Wave is a modular Rust / ESP-IDF firmware project for the Waveshare ESP32-S3 3.97-inch e-paper board. The native panel is `800 × 480`; the product UI renders on a logical `480 × 800` portrait canvas.
 
-The current firmware release is **v0.16.8** (`library-bookmark-tab-rendering-alignment`). It is a hardware-tested product-shell baseline rather than a one-file board demo.
+The current firmware release is **v0.17.0** (`reflowable-epub-foundation`). It extends the hardware-tested v0.16.8 product-shell baseline with bounded reflowable EPUB opening and EPUB TOC navigation.
 
 ## Current functionality
 
@@ -25,7 +25,7 @@ The current firmware release is **v0.16.8** (`library-bookmark-tab-rendering-ali
 
 | Category | Screen | Status |
 | --- | --- | --- |
-| Reader | Continue Reading, Library, Bookmarks | Ready: TXT library, normalized text rendering, Reader preferences, persistent resume, Recent, bookmarks and SD-backed anchor cache |
+| Reader | Continue Reading, Library, Bookmarks | Ready: TXT and bounded reflowable EPUB library, EPUB TOC navigation, normalized text rendering, Reader preferences with Inter, Atkinson, Serif and Literata body fonts, persistent resume, Recent, bookmarks and TXT SD-backed anchor cache |
 | Productivity | Calendar | Ready: RTC-localized, read-only monthly view |
 | Productivity | Voice Notes | Placeholder route; microphone capture deferred |
 | Games | TBD | Placeholder route |
@@ -43,9 +43,13 @@ The current firmware release is **v0.16.8** (`library-bookmark-tab-rendering-ali
 | Settings | Weather | Ready with retries: Open-Meteo conditions and four-day forecast |
 
 
-### Reader TXT UX, preferences, persistence and bookmarks
+### Reader TXT and reflowable EPUB UX, preferences, persistence and bookmarks
 
-`Reader > Library` scans `/sdcard/RUSTMIX/BOOKS` for TXT books and recognizes `.EPUB` / `.EPU` rows as clean future placeholders. TXT opening is stage-based: the loading screen is rendered first, encoding is detected (`UTF-8`, UTF-8 BOM or Windows-1252 fallback), Unicode punctuation is normalized into the bounded printable-ASCII Reader atlas, the first page opens before the whole book is indexed, and nearby page anchors continue building lazily in RAM. Reader-owned state persists under `/sdcard/RUSTMIX/READER`: `STATE.TXT` restores Continue Reading, `POSITS.TXT` stores bounded per-book resume anchors with read-only migration fallback from legacy `POSITIONS.TXT`, `RECENT.TXT` powers the Recent tab, `MARKS.TXT` stores page bookmarks, `PREFS.TXT` stores Reader theme, orientation, book font, size, paragraph alignment and progress choices, and `CACHE/<8HEX>.CCH` retains bounded TXT page anchors with layout-aware cache-fingerprint validation. All Reader-generated writable filenames comply with FAT 8.3 naming, and writes use `.TMP` and `.BAK` replacement files so interrupted state updates can recover safely. Reader options keep the TOC row visible and report `NONE` for ordinary TXT files until the EPUB milestone.
+`Reader > Library` scans `/sdcard/RUSTMIX/BOOKS` for `.TXT`, `.EPUB`, and short-name-safe `.EPU` books. TXT opening remains stage-based: the loading screen is rendered first, encoding is detected (`UTF-8`, UTF-8 BOM or Windows-1252 fallback), Unicode punctuation is normalized into the bounded printable-ASCII Reader atlas, the first page opens before the whole book is indexed, and nearby page anchors continue building lazily in RAM.
+
+EPUB opening now follows the same responsive first-page-first flow. `src/epub.rs` reads a bounded ZIP central directory, accepts stored and DEFLATE members, resolves `META-INF/container.xml`, parses one OPF manifest and spine, flattens XHTML chapters into a bounded UTF-8 reflow buffer, and exposes EPUB3 navigation or EPUB2 NCX records through `Reader Options > Table of Contents`. EPUB CSS, images, footnotes, hyperlinks, DRM, ZIP64 and fixed-layout rendering remain deferred.
+
+Reader-owned state persists under `/sdcard/RUSTMIX/READER`: `STATE.TXT` restores Continue Reading, `POSITS.TXT` stores bounded per-book resume anchors with read-only migration fallback from legacy `POSITIONS.TXT`, `RECENT.TXT` powers the Recent tab, `MARKS.TXT` stores page bookmarks, `PREFS.TXT` stores Reader theme, orientation, book font, size, paragraph alignment and progress choices, and `CACHE/<8HEX>.CCH` retains bounded TXT page anchors with layout-aware cache-fingerprint validation. EPUB resume and bookmarks reuse stable offsets inside the flattened EPUB text buffer while the source EPUB fingerprint remains unchanged. All Reader-generated writable filenames comply with FAT 8.3 naming, and writes use `.TMP` and `.BAK` replacement files so interrupted state updates can recover safely. The TOC row reports `NONE` for ordinary TXT files and `LIST` for EPUB books with navigation records.
 
 High Contrast and Classic now share one Reader body-content rectangle. The stronger High Contrast border is drawn outside that viewport, body glyphs are clipped at the right and bottom guards, and theme changes remain redraw-only with a global ghost-clearing refresh. TXT normalization also removes multiline Project Gutenberg `_..._` emphasis delimiters while preserving word-internal underscores and repeated underscore separator rows.
 
@@ -88,7 +92,8 @@ The MCU event loop intentionally remains active so Power-key polling and GPIO45 
 src/
 ├── app/                  # Product routes, state, typography, widgets and screens
 ├── audio/                # ES8311 codec profile, I2S runtime and tone generator
-├── reader.rs             # TXT normalization, preferences, pagination, persistence, bookmarks and cache
+├── reader.rs             # Shared TXT / EPUB Reader sessions, preferences, pagination and persistence
+├── epub.rs               # Bounded EPUB ZIP, OPF, spine, XHTML reflow and TOC parser
 ├── calendar.rs           # Hardware-independent Gregorian calendar math
 ├── unit_converter.rs     # Offline fixed-point conversion domain
 ├── weather.rs            # Open-Meteo parser, retry policy and last-known-good cache
@@ -114,6 +119,10 @@ Rust toolchain: esp
 Target: xtensa-esp32s3-espidf
 ESP-IDF: v5.4.3
 ```
+
+## EPUB dependency note
+
+v0.17.0 adds `miniz_oxide` for bounded raw-DEFLATE ZIP member extraction. The first local Cargo test or build refreshes `Cargo.lock` for this dependency. Commit the refreshed lockfile after local validation before publishing the repository.
 
 ## Validate, test, build and flash
 
@@ -146,6 +155,7 @@ Required runtime paths:
 /RUSTMIX/DISPLAY.TXT
 /RUSTMIX/SLEEP/*.BMP
 /RUSTMIX/BOOKS/*.TXT
+/RUSTMIX/BOOKS/*.EPUB or *.EPU
 /RUSTMIX/READER/              # created automatically for Reader state, per-book positions and PREFS.TXT
 ```
 
@@ -167,6 +177,7 @@ The device-side retry and stale-cache behavior is implemented, but physical test
 - [`docs/REFERENCE_AUDIT.md`](docs/REFERENCE_AUDIT.md)
 - [`docs/GITHUB_UPLOAD.md`](docs/GITHUB_UPLOAD.md)
 - [`docs/CLEANUP_REPORT.md`](docs/CLEANUP_REPORT.md)
+- [`docs/EPUB_XML_ATTRIBUTE_CONTRACT_REPAIR.md`](docs/EPUB_XML_ATTRIBUTE_CONTRACT_REPAIR.md)
 
 ## Packaging a clean source ZIP
 
@@ -178,8 +189,31 @@ The generated archive is written under `dist/` and excludes build outputs, Git m
 
 ## Licenses
 
-Firmware source is MIT licensed. Generated embedded bitmap atlases are derived from Inter and Atkinson Hyperlegible under the SIL Open Font License 1.1, plus DejaVu Serif under the Bitstream Vera / DejaVu notice. See [`docs/licenses/FONT_NOTICES.md`](docs/licenses/FONT_NOTICES.md).
+Firmware source is MIT licensed. Generated embedded bitmap atlases are derived from Inter, Atkinson Hyperlegible, Atkinson Hyperlegible Next Medium and Literata Medium under the SIL Open Font License 1.1, plus DejaVu Serif under the Bitstream Vera / DejaVu notice. See [`docs/licenses/FONT_NOTICES.md`](docs/licenses/FONT_NOTICES.md).
 
 ### Reader FAT 8.3 runtime completion
 
 v0.16.7 keeps Reader-owned position writes on `POSITS.TXT` and TXT anchor caches on `<8HEX>.CCH`. The Reader validates the matching `.TMP` and `.BAK` siblings before writing. Bookmark rows show a page-number column while byte offsets remain the authoritative jump anchors.
+
+## v0.17.0 EPUB parser and documentation repair v2
+
+Marker: `rustmix-wave=v0.17.0-parser-doc-repair-v2`
+
+The EPUB `container.xml` rootfile lookup is delimiter-aware so `<rootfiles>` is not mistaken for the singular `<rootfile ...>` entry. See `docs/V0.17.0-PARSER-DOC-REPAIR-V2.md`.
+
+
+## v0.17.0 EPUB XML attribute contract repair
+
+Marker: `rustmix-wave=epub-xml-attribute-tokenizer-repair-ready`
+
+The bounded EPUB parser now skips the opening XML element name before scanning quoted attributes. This repairs valid `container.xml` rootfile extraction, keeps singular `<rootfile>` matching distinct from the plural `<rootfiles>` wrapper, restores the validator-required v0.16.4–v0.16.8 physical smoke-test records, removes patch backup residue, and prevents backup artifacts from entering release ZIPs. See `docs/EPUB_XML_ATTRIBUTE_CONTRACT_REPAIR.md`.
+
+## v0.17.0 EPUB parser stack isolation repair
+
+Marker: `rustmix-wave=reader-epub-parser-stack-isolation-ready`
+
+Real EPUB archive parsing, DEFLATE expansion and XHTML flattening now run on a short-lived dedicated `epub-parser` worker with a 64 KB stack. The staged Reader flow remains synchronous from the UI perspective, while the accepted 16 KB firmware main-task stack is preserved. See `docs/EPUB_PARSER_STACK_ISOLATION_REPAIR.md`.
+
+### Reader e-ink font pack
+
+v0.17.2 preserves the existing `serif` and `atkinson-hyperlegible` persisted preference values, adds explicit `literata`, and keeps Inter as the shared UI-backed Reader option. Reader-only Atkinson Hyperlegible Next Medium and Literata Medium strikes are generated as printable-ASCII Rust arrays; raw font binaries are intentionally excluded from the repository. Font selection remains part of the existing layout cache fingerprint, so TXT pagination and EPUB chapter-relative pagination rebuild through the staged Reader path while bookmarks keep byte offsets as authoritative anchors. See `docs/READER_EINK_FONT_PACK.md`.
