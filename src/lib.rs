@@ -21,6 +21,7 @@ pub mod ntp;
 pub mod orientation;
 pub mod power;
 pub mod power_key;
+pub mod reader;
 pub mod regional;
 pub mod rtc;
 pub mod rtc_alarm_interrupt;

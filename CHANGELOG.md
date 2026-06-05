@@ -1,4 +1,88 @@
+## v0.16.8 — Library Bookmark Tab Rendering Alignment
+
+- Aligned `Reader > Library > Bookmarks` with the dedicated Bookmarks screen.
+- Rendered bookmark rows as `PAGE N` labels using layout-aware resolution with stored-page fallback.
+- Changed the bookmark-tab status strip to `<n> saved / MARKS.TXT`.
+- Kept Books and Files rows on the existing `TXT / OPEN` presentation.
+- Removed the unrelated EPUB-placeholder note from the Bookmarks tab only.
+
+## v0.16.7 — Reader FAT 8.3 Runtime Completion and Bookmark Page Labels
+
+- Audited every Reader-owned writable primary, TMP and BAK path.
+- Kept per-book positions on `POSITS.*` and cache files on `<8HEX>.*` without a `B` prefix.
+- Added layout-aware bookmark `PAGE N` labels while keeping byte offsets authoritative.
+- Suppressed repeated identical degraded persistence log messages until status changes.
+
+## v0.16.6 — Reader FAT 8.3 Persistence Filename Repair
+
+- Replaced writable per-book resume files `POSITIONS.TXT`, `POSITIONS.TMP`, and `POSITIONS.BAK` with FAT 8.3-safe `POSITS.TXT`, `POSITS.TMP`, and `POSITS.BAK`.
+- Added read-only migration fallback for legacy `POSITIONS.TXT` and `POSITIONS.BAK` when the new short-name-safe primary is absent.
+- Removed the extra `B` prefix from TXT anchor-cache basenames so generated cache files use exactly eight hexadecimal characters, such as `ED9B69AF.CCH`.
+- Added runtime FAT 8.3 guards for Reader-owned primary, `.TMP`, and `.BAK` write paths.
+- Preserved per-book resume semantics, explicit bookmark priority, Reader Preferences navigation, paragraph alignment, first-page-first loading, lazy indexing, and sleep-route restoration.
+
 # Changelog
+
+## v0.16.5 — Reader Preferences Settings-Style Navigation Alignment
+
+- Changed Reading Preferences to the same Settings-style row interaction used elsewhere in the UI.
+- UP / DOWN now moves the highlighted preference row.
+- SELECT now changes only the highlighted row value and persists it immediately.
+- HOLD BOOT returns to Reader Options.
+- Layout-sensitive changes still enter the staged current-page rebuild path immediately.
+- Redraw-only Theme and Show Progress changes remain in-place updates.
+- Preserved per-book resume, bookmark authority, paragraph alignment, High Contrast geometry, TXT cleanup and sleep restoration.
+
+## v0.16.4 — Per-Book Resume and Reader Controls Alignment
+
+- Added bounded per-book resume persistence under `/sdcard/RUSTMIX/READER/POSITIONS.TXT`.
+- Resume records are fingerprinted by path, source size, modified timestamp when available, and format.
+- Books opened from Continue Reading, Books, and Files resume from their saved per-book positions.
+- Explicit bookmark jumps remain higher-authority than general per-book resume positions.
+- Split Reader Options actions from the Reading Preferences editor.
+- Standardized Reader action-menu controls as UP/DOWN move, SELECT activate, and HOLD BOOT back.
+- Standardized Reader preference controls as UP/DOWN change, SELECT next, and HOLD BOOT save/back.
+- Added Reader Paragraph Alignment with Justified as the default and Left, Center, and Right alternatives.
+- Paragraph alignment persists in `PREFS.TXT` and participates in the TXT layout-cache fingerprint.
+- Preserved the v0.16.3 shared Reader viewport, High Contrast geometry repair, multiline Gutenberg emphasis cleanup, persistence, staged loading, lazy caching, and sleep-route restoration.
+
+## v0.16.3 — Reader High-Contrast Layout and TXT Emphasis Cleanup
+
+- Repaired High Contrast Reader geometry by using one shared body-content rectangle for Classic and High Contrast.
+- Moved the High Contrast border outside the shared text viewport and added explicit top padding below the status strip.
+- Added right-edge and bottom-edge pixel clip guards for Reader body glyphs.
+- Kept Reading Theme redraw-only and retained the global ghost-clearing refresh request after a theme change.
+- Removed multiline Project Gutenberg `_..._` emphasis markers before wrapping while preserving word-internal underscores and repeated underscore separators.
+- Preserved original TXT byte anchors for Continue Reading and bookmarks.
+
+## v0.16.2 — Reader UX Repair and Preferences Foundation
+
+- Updated Reader category rows so Continue Reading, Library and Bookmarks all report `READY`.
+- Added TXT punctuation normalization before pagination while preserving source-byte anchors for resume and bookmarks.
+- Added smart-quote, dash, ellipsis, non-breaking-space and bounded Latin transliteration fallbacks.
+- Removed simple `_text_` emphasis markers from rendered TXT pages.
+- Added Reader-owned `/sdcard/RUSTMIX/READER/PREFS.TXT` persistence with atomic `.TMP` / `.BAK` replacement.
+- Added Reading Theme, Portrait / Landscape orientation, Small / Medium / Large / XLarge book font sizes, Inter / Atkinson Hyperlegible / Serif book fonts and Show Progress.
+- Added generated printable-ASCII DejaVu Serif Reader atlases without distributing raw font files.
+- Added first-page-first layout-cache rebuilds after orientation, book-font or book-size changes.
+
+## v0.16.1 — Reader State Persistence and Bookmarks
+
+- Added Reader-owned `/sdcard/RUSTMIX/READER` state files: `STATE.TXT`, `RECENT.TXT` and `MARKS.TXT`.
+- Added persistent Continue Reading, Recent-tab history and add/remove bookmark behavior.
+- Added bookmark-list navigation from the Reader category, Library Bookmarks tab and Reader options.
+- Added SD-backed TXT anchor caches under `/sdcard/RUSTMIX/READER/CACHE` with path, size, modified-time, format and layout fingerprint validation.
+- Added `.TMP` / `.BAK` atomic replacement and corrupt-state fallback behavior.
+- Preserved first-page-first opening, lazy nearby RAM caching, TXT TOC `NONE`, Clear Ghosting, BOOT Back and sleep-route restoration.
+
+## v0.16.0 — Reader Library and TXT Foundation
+
+- Activated `Reader > Library` with `/sdcard/RUSTMIX/BOOKS` scanning.
+- Added TXT detection, UTF-8 / BOM handling and Windows-1252 fallback.
+- Added responsive staged opening, first-page-first rendering and lazy nearby-page RAM caching.
+- Added Reader page header, progress, options shell, visible TXT TOC `NONE` row and manual ghost-clearing refresh.
+- Kept EPUB / EPU rows visible as clean architecture placeholders for v0.17.0.
+- Preserved Calendar, Unit Converter, sleep-image mode, wake guard and network suspension.
 
 ## v0.15.0 — Unit Converter Foundation
 
@@ -57,3 +141,10 @@
 ## v0.12.2 — Network-Suspended Sleep Images
 
 - Added SNTP, Wi-Fi and Weather suspension while a static sleep image is visible.
+
+## 0.16.7 — Reader FAT 8.3 Runtime Completion and Bookmark Page Labels
+
+- Audited every Reader-owned writable primary, TMP and BAK path.
+- Kept per-book positions on `POSITS.*` and cache files on `<8HEX>.*` without a `B` prefix.
+- Added layout-aware bookmark `PAGE N` labels while keeping byte offsets authoritative.
+- Suppressed repeated identical degraded persistence log messages until status changes.

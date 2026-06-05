@@ -99,3 +99,53 @@ Install the bundled samples only:
 ```bash
 ./scripts/install-sleep-images.sh /Volumes/YOUR_SD_CARD
 ```
+
+
+## Reader books
+
+Create `/RUSTMIX/BOOKS` and copy TXT books into it. v0.16.2 renders `.TXT` books and recognizes `.EPUB` / `.EPU` entries as placeholders for the reflowable EPUB milestone.
+
+
+## Reader-owned state
+
+The firmware creates `/RUSTMIX/READER` and `/RUSTMIX/READER/CACHE` automatically after the first TXT page opens. Do not hand-edit active Reader state while the device is running.
+
+```text
+/RUSTMIX/READER/STATE.TXT
+/RUSTMIX/READER/RECENT.TXT
+/RUSTMIX/READER/MARKS.TXT
+/RUSTMIX/READER/PREFS.TXT
+/RUSTMIX/READER/CACHE/<8HEX>.CCH
+```
+
+Reader writes use temporary and backup siblings (`.TMP`, `.BAK`) so an interrupted update can recover on the next boot.
+
+## Reader preferences
+
+`PREFS.TXT` is created automatically after the first Reader preference change. Supported values:
+
+```text
+version=1
+theme=classic|high-contrast
+orientation=portrait|landscape
+font_size=small|medium|large|xlarge
+book_font=inter|atkinson-hyperlegible|serif
+show_progress=true|false
+```
+
+## Reader per-book resume state
+
+The Reader creates `/RUSTMIX/READER/POSITS.TXT` automatically when books are opened. It stores a bounded map of last-read source-byte anchors for previously opened books.
+
+## FAT 8.3-safe Reader persistence filenames
+
+The Reader writes per-book progress to `/RUSTMIX/READER/POSITS.TXT`. Cache files use exactly eight hexadecimal basename characters such as `/RUSTMIX/READER/CACHE/ED9B69AF.CCH`. Temporary and backup siblings use `.TMP` and `.BAK`. Legacy `POSITIONS.TXT` is read-only migration input when the short-name-safe primary is absent.
+
+## Reader runtime files after v0.16.7
+
+```text
+/RUSTMIX/READER/POSITS.TXT
+/RUSTMIX/READER/CACHE/<8HEX>.CCH
+```
+
+Generated Reader cache basenames are exactly eight hexadecimal characters and do not use a leading prefix.

@@ -29,12 +29,9 @@ Sleep-image mode powers down the panel rail and pauses network services, but the
 
 Audio playback is active, but microphone RX capture is deferred. `Productivity > Voice Notes` remains a placeholder.
 
-## Reader, Dictionary and Games
+## Deferred applications and Reader work
 
-The UI routes exist, but these apps remain placeholders:
+Reader TXT opening, Continue Reading, Recent and bookmarks are active. Deferred Reader work includes reflowable EPUB opening, EPUB TOC parsing and Reader preference profiles. The remaining placeholder apps are:
 
-- Continue Reading
-- Library
-- Bookmarks
 - Dictionary
 - Games TBD

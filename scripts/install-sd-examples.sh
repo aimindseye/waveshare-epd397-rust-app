@@ -15,7 +15,7 @@ fi
 
 SRC="$ROOT/examples/sd-card/RUSTMIX"
 DEST="$VOLUME/RUSTMIX"
-mkdir -p "$DEST/SLEEP"
+mkdir -p "$DEST/SLEEP" "$DEST/BOOKS" "$DEST/READER/CACHE"
 
 copy_example() {
   local src="$1"
@@ -34,5 +34,7 @@ copy_example "$SRC/ALARMS.TXT.example" "$DEST/ALARMS.TXT"
 copy_example "$SRC/DISPLAY.TXT.example" "$DEST/DISPLAY.TXT"
 copy_example "$SRC/SLEEP/SLEEP.BMP" "$DEST/SLEEP/SLEEP.BMP"
 copy_example "$SRC/SLEEP/SLEEP01.BMP" "$DEST/SLEEP/SLEEP01.BMP"
+copy_example "$SRC/BOOKS/README.TXT.example" "$DEST/BOOKS/README.TXT"
+copy_example "$SRC/READER/PREFS.TXT.example" "$DEST/READER/PREFS.TXT"
 
 echo "rustmix-wave-sd-examples-ready=$DEST"

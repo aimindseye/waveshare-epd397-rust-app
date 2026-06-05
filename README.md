@@ -2,7 +2,7 @@
 
 RustMix Wave is a modular Rust / ESP-IDF firmware project for the Waveshare ESP32-S3 3.97-inch e-paper board. The native panel is `800 × 480`; the product UI renders on a logical `480 × 800` portrait canvas.
 
-The current firmware release is **v0.15.0** (`unit-converter-foundation`). It is a hardware-tested product-shell baseline rather than a one-file board demo.
+The current firmware release is **v0.16.8** (`library-bookmark-tab-rendering-alignment`). It is a hardware-tested product-shell baseline rather than a one-file board demo.
 
 ## Current functionality
 
@@ -25,7 +25,7 @@ The current firmware release is **v0.15.0** (`unit-converter-foundation`). It is
 
 | Category | Screen | Status |
 | --- | --- | --- |
-| Reader | Continue Reading, Library, Bookmarks | Placeholder routes |
+| Reader | Continue Reading, Library, Bookmarks | Ready: TXT library, normalized text rendering, Reader preferences, persistent resume, Recent, bookmarks and SD-backed anchor cache |
 | Productivity | Calendar | Ready: RTC-localized, read-only monthly view |
 | Productivity | Voice Notes | Placeholder route; microphone capture deferred |
 | Games | TBD | Placeholder route |
@@ -41,6 +41,17 @@ The current firmware release is **v0.15.0** (`unit-converter-foundation`). It is
 | Settings | Motion | Ready: QMI8658 accelerometer and gyroscope |
 | Settings | Network | Ready: SD-provisioned Wi-Fi and SNTP status |
 | Settings | Weather | Ready with retries: Open-Meteo conditions and four-day forecast |
+
+
+### Reader TXT UX, preferences, persistence and bookmarks
+
+`Reader > Library` scans `/sdcard/RUSTMIX/BOOKS` for TXT books and recognizes `.EPUB` / `.EPU` rows as clean future placeholders. TXT opening is stage-based: the loading screen is rendered first, encoding is detected (`UTF-8`, UTF-8 BOM or Windows-1252 fallback), Unicode punctuation is normalized into the bounded printable-ASCII Reader atlas, the first page opens before the whole book is indexed, and nearby page anchors continue building lazily in RAM. Reader-owned state persists under `/sdcard/RUSTMIX/READER`: `STATE.TXT` restores Continue Reading, `POSITS.TXT` stores bounded per-book resume anchors with read-only migration fallback from legacy `POSITIONS.TXT`, `RECENT.TXT` powers the Recent tab, `MARKS.TXT` stores page bookmarks, `PREFS.TXT` stores Reader theme, orientation, book font, size, paragraph alignment and progress choices, and `CACHE/<8HEX>.CCH` retains bounded TXT page anchors with layout-aware cache-fingerprint validation. All Reader-generated writable filenames comply with FAT 8.3 naming, and writes use `.TMP` and `.BAK` replacement files so interrupted state updates can recover safely. Reader options keep the TOC row visible and report `NONE` for ordinary TXT files until the EPUB milestone.
+
+High Contrast and Classic now share one Reader body-content rectangle. The stronger High Contrast border is drawn outside that viewport, body glyphs are clipped at the right and bottom guards, and theme changes remain redraw-only with a global ghost-clearing refresh. TXT normalization also removes multiline Project Gutenberg `_..._` emphasis delimiters while preserving word-internal underscores and repeated underscore separator rows.
+
+Reading Preferences now follows the firmware Settings-style row interaction contract: UP / DOWN moves the highlighted preference row, SELECT changes only that row's value, and HOLD BOOT returns to Reader Options. Preference changes persist immediately; layout-sensitive changes continue to use the staged current-page rebuild path.
+
+`Reader > Library > Bookmarks` now presents saved marks with the same layout-aware `PAGE N` labels as the dedicated Bookmarks screen. The Library bookmark tab reports `MARKS.TXT`, keeps multiple marks from the same book as separate byte-anchor rows, and omits the unrelated EPUB-placeholder note. Books and Files retain their existing `TXT / OPEN` presentation.
 
 ### Sleep-image mode
 
@@ -77,6 +88,7 @@ The MCU event loop intentionally remains active so Power-key polling and GPIO45 
 src/
 ├── app/                  # Product routes, state, typography, widgets and screens
 ├── audio/                # ES8311 codec profile, I2S runtime and tone generator
+├── reader.rs             # TXT normalization, preferences, pagination, persistence, bookmarks and cache
 ├── calendar.rs           # Hardware-independent Gregorian calendar math
 ├── unit_converter.rs     # Offline fixed-point conversion domain
 ├── weather.rs            # Open-Meteo parser, retry policy and last-known-good cache
@@ -133,6 +145,8 @@ Required runtime paths:
 /RUSTMIX/ALARMS.TXT
 /RUSTMIX/DISPLAY.TXT
 /RUSTMIX/SLEEP/*.BMP
+/RUSTMIX/BOOKS/*.TXT
+/RUSTMIX/READER/              # created automatically for Reader state, per-book positions and PREFS.TXT
 ```
 
 See [`docs/SD_CARD_SETUP.md`](docs/SD_CARD_SETUP.md).
@@ -144,6 +158,8 @@ The device-side retry and stale-cache behavior is implemented, but physical test
 ## Documentation
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/READER_TXT_FOUNDATION.md`](docs/READER_TXT_FOUNDATION.md)
+- [`docs/READER_STATE_PERSISTENCE.md`](docs/READER_STATE_PERSISTENCE.md)
 - [`docs/BOARD_CONTRACT.md`](docs/BOARD_CONTRACT.md)
 - [`docs/SD_CARD_SETUP.md`](docs/SD_CARD_SETUP.md)
 - [`docs/PHYSICAL_SMOKE_TEST.md`](docs/PHYSICAL_SMOKE_TEST.md)
@@ -162,4 +178,8 @@ The generated archive is written under `dist/` and excludes build outputs, Git m
 
 ## Licenses
 
-Firmware source is MIT licensed. Generated embedded bitmap atlases are derived from Inter and Atkinson Hyperlegible under the SIL Open Font License 1.1. See [`docs/licenses/FONT_NOTICES.md`](docs/licenses/FONT_NOTICES.md).
+Firmware source is MIT licensed. Generated embedded bitmap atlases are derived from Inter and Atkinson Hyperlegible under the SIL Open Font License 1.1, plus DejaVu Serif under the Bitstream Vera / DejaVu notice. See [`docs/licenses/FONT_NOTICES.md`](docs/licenses/FONT_NOTICES.md).
+
+### Reader FAT 8.3 runtime completion
+
+v0.16.7 keeps Reader-owned position writes on `POSITS.TXT` and TXT anchor caches on `<8HEX>.CCH`. The Reader validates the matching `.TMP` and `.BAK` siblings before writing. Bookmark rows show a page-number column while byte offsets remain the authoritative jump anchors.

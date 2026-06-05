@@ -59,6 +59,40 @@ pub enum UiTextRole {
     Large,
 }
 
+/// Half-open clipping rectangle for bounded text drawing.
+///
+/// Reader pages use this guard so body glyphs cannot cross the shared body
+/// viewport even when a proportional bitmap strike contains a wide glyph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TextBounds {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl TextBounds {
+    #[must_use]
+    pub const fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[must_use]
+    pub const fn width(self) -> i32 {
+        self.right - self.left
+    }
+
+    #[must_use]
+    const fn contains(self, point: Point) -> bool {
+        point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
+    }
+}
+
 /// Transparent UI text style used by the firmware-local bitmap renderer.
 #[derive(Clone, Copy, Debug)]
 pub struct UiTextStyle {
@@ -75,6 +109,16 @@ impl UiTextStyle {
     #[must_use]
     pub const fn line_height(self) -> u8 {
         self.font.line_height
+    }
+
+    /// Measure one printable-ASCII Reader line using this bitmap strike.
+    /// Unsupported characters follow the same `?` fallback as drawing.
+    #[must_use]
+    pub fn text_width(self, text: &str) -> i32 {
+        text.chars()
+            .filter(|character| *character != '\n')
+            .map(|character| i32::from(self.font.glyph(character).advance))
+            .sum()
     }
 }
 
@@ -102,6 +146,28 @@ impl<'a> Text<'a> {
     where
         D: DrawTarget<Color = BinaryColor>,
     {
+        self.draw_with_bounds(display, None)
+    }
+
+    /// Draw transparent text while discarding pixels outside one half-open
+    /// viewport. The returned cursor still advances through the full string so
+    /// callers can use this as a final rendering guard without altering source
+    /// byte anchors or pagination state.
+    pub fn draw_clipped<D>(&self, display: &mut D, bounds: TextBounds) -> Result<Point, D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
+        self.draw_with_bounds(display, Some(bounds))
+    }
+
+    fn draw_with_bounds<D>(
+        &self,
+        display: &mut D,
+        bounds: Option<TextBounds>,
+    ) -> Result<Point, D::Error>
+    where
+        D: DrawTarget<Color = BinaryColor>,
+    {
         let start_x = self.baseline.x;
         let mut cursor = self.baseline;
         for character in self.text.chars() {
@@ -111,7 +177,7 @@ impl<'a> Text<'a> {
                 continue;
             }
             let glyph = self.style.font.glyph(character);
-            draw_glyph(display, cursor, glyph, self.style)?;
+            draw_glyph(display, cursor, glyph, self.style, bounds)?;
             cursor.x += i32::from(glyph.advance);
         }
         Ok(cursor)
@@ -123,6 +189,7 @@ fn draw_glyph<D>(
     baseline: Point,
     glyph: Glyph,
     style: UiTextStyle,
+    bounds: Option<TextBounds>,
 ) -> Result<(), D::Error>
 where
     D: DrawTarget<Color = BinaryColor>,
@@ -139,7 +206,9 @@ where
                 baseline.x + i32::from(glyph.left) + column as i32,
                 baseline.y + i32::from(glyph.top) + row as i32,
             );
-            display.draw_iter(core::iter::once(Pixel(point, style.color)))?;
+            if bounds.map_or(true, |clip| clip.contains(point)) {
+                display.draw_iter(core::iter::once(Pixel(point, style.color)))?;
+            }
         }
     }
     Ok(())
@@ -238,7 +307,7 @@ impl DisplayPreferences {
 mod tests {
     use embedded_graphics::{mock_display::MockDisplay, pixelcolor::BinaryColor, prelude::Point};
 
-    use super::Text;
+    use super::{Text, TextBounds};
     use crate::app::display::{DisplayPreferences, UiFontFamily, UiFontSize};
 
     #[test]
@@ -252,6 +321,17 @@ mod tests {
             .draw(&mut display)
             .unwrap();
         assert!(cursor.x > 0);
+    }
+
+    #[test]
+    fn clipped_text_guard_discards_pixels_outside_bounds() {
+        let mut display = MockDisplay::<BinaryColor>::new();
+        display.set_allow_overdraw(true);
+        let style = DisplayPreferences::default().body_style();
+        let cursor = Text::new("RustMix", Point::new(0, 24), style)
+            .draw_clipped(&mut display, TextBounds::new(0, 0, 10, 64))
+            .unwrap();
+        assert!(cursor.x > 10);
     }
 
     #[test]

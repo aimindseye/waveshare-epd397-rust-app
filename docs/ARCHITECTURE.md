@@ -103,4 +103,30 @@ Retry waits are event-loop scheduled rather than implemented as blocking delays.
 - bounded text previews
 - root-confined navigation
 
-Display preferences are a narrow exception: `src/app/display.rs` reads and writes only `/sdcard/RUSTMIX/DISPLAY.TXT`.
+Display preferences are a narrow exception: `src/app/display.rs` reads and writes only `/sdcard/RUSTMIX/DISPLAY.TXT`. Reader state is a second narrow exception: `src/reader.rs` writes only bounded files below `/sdcard/RUSTMIX/READER`.
+
+
+### Reader TXT persistence and bookmarks
+
+`src/reader.rs` owns the bounded Reader domain: `/sdcard/RUSTMIX/BOOKS` scanning, TXT / EPUB-placeholder classification, encoding detection, staged first-page-first open, lazy byte-anchor pagination, nearby-page RAM cache, persistent Continue Reading, Recent and bookmarks. Reader-owned state lives below `/sdcard/RUSTMIX/READER`; `.TMP` and `.BAK` siblings provide interrupted-write recovery, while `CACHE/<8HEX>.CCH` retains bounded TXT anchors with fingerprint validation. `src/app/screens/reader.rs` renders Reader landing, Library tabs, the loading progress screen, text pages, bookmark lists, options and the TXT TOC placeholder. EPUB parsing remains an isolated follow-on milestone.
+
+
+## Reader preference and typography boundary
+
+The Reader owns `PREFS.TXT` separately from global `DISPLAY.TXT`. Page-layout fingerprints include orientation, book-font family and book-font size. Reader-only serif raster arrays live in `src/app/reader_serif_assets.rs`; raw font binaries are intentionally absent. TXT normalization occurs after byte-aware decoding and before wrapping, so bookmarks continue to use original source-byte anchors.
+
+## v0.16.4 Reader body geometry boundary
+
+Classic and High Contrast use the same pagination rectangle. The High Contrast frame is rendered outside that rectangle, and `Text::draw_clipped` applies a final half-open pixel guard on the Reader body surface. Theme changes therefore redraw the current page without changing TXT page anchors or cache fingerprints. TXT normalization removes bounded multiline Project Gutenberg underscore emphasis delimiters while retaining source-byte anchors, filename-style word-internal underscores and repeated underscore separators.
+
+## v0.16.4 Reader resume and controls boundary
+
+`POSITS.TXT` is the FAT 8.3-safe bounded 64-record per-book resume map separate from global `STATE.TXT`; legacy `POSITIONS.TXT` is accepted read-only for migration. Reader anchor caches use exactly eight hexadecimal basename characters plus `.CCH`, `.TMP`, or `.BAK`. Reader Options is action-oriented; Reading Preferences uses Settings-style UP/DOWN row movement and SELECT value changes. Paragraph alignment is Reader-owned and cache-fingerprinted.
+
+## Reader FAT 8.3 runtime completion and bookmark labels
+
+Reader-owned runtime writes are centralized through the FAT 8.3 guard. Writable per-book positions use `POSITS.*`; TXT anchor caches use `<8HEX>.*`. `POSITIONS.TXT` is legacy read-only migration input. Bookmark labels are resolved from current-layout anchors when available and otherwise fall back to the stored page index.
+
+## Library bookmark-tab presentation boundary
+
+`src/app/screens/reader.rs` uses a bookmark-specific Library-tab presentation branch. `Reader > Library > Bookmarks` resolves each row through the same layout-aware bookmark page-label helper used by the dedicated Bookmarks screen, while the persisted byte offset remains the canonical jump anchor. The Bookmarks tab reports `<n> saved / MARKS.TXT`, omits the EPUB-placeholder note, and keeps duplicate titles as separate marks. Books and Files retain the generic format / open columns.

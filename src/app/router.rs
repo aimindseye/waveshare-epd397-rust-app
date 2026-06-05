@@ -13,6 +13,12 @@ pub enum ScreenRoute {
     ContinueReading,
     Library,
     Bookmarks,
+    ReaderBookmarks,
+    ReaderLoading,
+    ReaderPage,
+    ReaderOptions,
+    ReaderPreferences,
+    ReaderToc,
     Calendar,
     VoiceNotes,
     GamesTbd,
@@ -51,6 +57,12 @@ impl ScreenRoute {
             Self::ContinueReading => "Continue Reading",
             Self::Library => "Library",
             Self::Bookmarks => "Bookmarks",
+            Self::ReaderBookmarks => "Reader Bookmarks",
+            Self::ReaderLoading => "Opening Book",
+            Self::ReaderPage => "Reader Page",
+            Self::ReaderOptions => "Reader Options",
+            Self::ReaderPreferences => "Reading Preferences",
+            Self::ReaderToc => "Table of Contents",
             Self::Calendar => "Calendar",
             Self::VoiceNotes => "Voice Notes",
             Self::GamesTbd => "TBD",
@@ -89,6 +101,12 @@ impl ScreenRoute {
             Self::ContinueReading => "continue-reading",
             Self::Library => "library",
             Self::Bookmarks => "bookmarks",
+            Self::ReaderBookmarks => "reader-bookmarks",
+            Self::ReaderLoading => "reader-loading",
+            Self::ReaderPage => "reader-page",
+            Self::ReaderOptions => "reader-options",
+            Self::ReaderPreferences => "reader-preferences",
+            Self::ReaderToc => "reader-toc",
             Self::Calendar => "calendar",
             Self::VoiceNotes => "voice-notes",
             Self::GamesTbd => "games-tbd",
@@ -125,15 +143,7 @@ impl ScreenRoute {
 
     #[must_use]
     pub const fn is_placeholder(self) -> bool {
-        matches!(
-            self,
-            Self::ContinueReading
-                | Self::Library
-                | Self::Bookmarks
-                | Self::VoiceNotes
-                | Self::GamesTbd
-                | Self::Dictionary
-        )
+        matches!(self, Self::VoiceNotes | Self::GamesTbd | Self::Dictionary)
     }
 
     #[must_use]
@@ -144,6 +154,11 @@ impl ScreenRoute {
                 Some(Self::Home)
             }
             Self::ContinueReading | Self::Library | Self::Bookmarks => Some(Self::Reader),
+            Self::ReaderBookmarks => Some(Self::ReaderOptions),
+            Self::ReaderLoading | Self::ReaderPage => Some(Self::Library),
+            Self::ReaderOptions => Some(Self::ReaderPage),
+            Self::ReaderPreferences => Some(Self::ReaderOptions),
+            Self::ReaderToc => Some(Self::ReaderOptions),
             Self::Calendar | Self::VoiceNotes => Some(Self::Productivity),
             Self::GamesTbd => Some(Self::Games),
             Self::Files | Self::Dictionary | Self::UnitConverter => Some(Self::Tools),
@@ -181,6 +196,7 @@ impl ScreenRoute {
                 | Self::NetworkDetails
                 | Self::Alarms
                 | Self::Calendar
+                | Self::ReaderLoading
         )
     }
 }

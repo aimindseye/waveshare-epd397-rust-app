@@ -53,20 +53,20 @@ const HOME_ENTRIES: [MenuEntry; MAIN_CATEGORY_COUNT] = [
 const READER_ENTRIES: [MenuEntry; 3] = [
     MenuEntry {
         label: "Continue Reading",
-        subtitle: "Resume the active book",
-        badge: "SOON",
+        subtitle: "Resume the last saved book",
+        badge: "READY",
         route: ScreenRoute::ContinueReading,
     },
     MenuEntry {
         label: "Library",
-        subtitle: "Browse books on the SD card",
-        badge: "SOON",
+        subtitle: "TXT and EPUB book library",
+        badge: "READY",
         route: ScreenRoute::Library,
     },
     MenuEntry {
         label: "Bookmarks",
         subtitle: "Saved reading positions",
-        badge: "SOON",
+        badge: "READY",
         route: ScreenRoute::Bookmarks,
     },
 ];
@@ -223,6 +223,22 @@ mod tests {
             assert!(category_entries(route)
                 .iter()
                 .all(|entry| entry.route != ScreenRoute::Home));
+        }
+    }
+
+    #[test]
+    fn reader_contains_ready_txt_library() {
+        let reader = category_entries(ScreenRoute::Reader);
+        for route in [
+            ScreenRoute::ContinueReading,
+            ScreenRoute::Library,
+            ScreenRoute::Bookmarks,
+        ] {
+            let entry = reader
+                .iter()
+                .find(|entry| entry.route == route)
+                .expect("Reader entry");
+            assert_eq!(entry.badge, "READY");
         }
     }
 

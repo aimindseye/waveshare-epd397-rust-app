@@ -19,6 +19,7 @@ pub mod home;
 pub mod motion;
 pub mod network;
 pub mod placeholder;
+pub mod reader;
 pub mod unit_converter;
 pub mod weather;
 
@@ -31,6 +32,16 @@ pub fn render_active_screen(
         ScreenRoute::Home => home::render_home(display, state),
         route if route.is_category() => category::render_category(display, state),
         route if route.is_placeholder() => placeholder::render_placeholder(display, state),
+        ScreenRoute::ContinueReading => reader::render_continue_reading(display, state),
+        ScreenRoute::Library => reader::render_library(display, state),
+        ScreenRoute::Bookmarks | ScreenRoute::ReaderBookmarks => {
+            reader::render_bookmarks(display, state)
+        }
+        ScreenRoute::ReaderLoading => reader::render_loading(display, state),
+        ScreenRoute::ReaderPage => reader::render_page(display, state),
+        ScreenRoute::ReaderOptions => reader::render_options(display, state),
+        ScreenRoute::ReaderPreferences => reader::render_preferences(display, state),
+        ScreenRoute::ReaderToc => reader::render_toc(display, state),
         ScreenRoute::Calendar => calendar::render_calendar(display, state),
         ScreenRoute::UnitConverter => unit_converter::render_unit_converter(display, state),
         ScreenRoute::Clock => clock::render_clock(display, state),
@@ -56,9 +67,6 @@ pub fn render_active_screen(
         | ScreenRoute::Games
         | ScreenRoute::Tools
         | ScreenRoute::Settings
-        | ScreenRoute::ContinueReading
-        | ScreenRoute::Library
-        | ScreenRoute::Bookmarks
         | ScreenRoute::VoiceNotes
         | ScreenRoute::GamesTbd
         | ScreenRoute::Dictionary => unreachable!("category and placeholder routes handled above"),

@@ -8,6 +8,7 @@ use crate::{
     calendar::CalendarUiState,
     network::NetworkSnapshot,
     orientation::DisplayOrientation,
+    reader::{ReaderOption, ReaderOrientation, ReaderTickOutcome, ReaderUiState},
     regional::RegionalPreferences,
     storage::StorageSnapshot,
     unit_converter::UnitConverterUiState,
@@ -37,6 +38,8 @@ pub struct AppState {
     pub calendar: CalendarUiState,
     /// Offline fixed-point Unit Converter cursor and editable field.
     pub unit_converter: UnitConverterUiState,
+    /// TXT Reader library, staged opening, RAM cache and option shell.
+    pub reader: ReaderUiState,
     pub partial_refreshes: u8,
     pub panel_awake: bool,
     pub select_presses: u32,
@@ -69,6 +72,7 @@ impl Default for AppState {
             display: DisplayPreferences::default(),
             calendar: CalendarUiState::default(),
             unit_converter: UnitConverterUiState::default(),
+            reader: ReaderUiState::default(),
             partial_refreshes: 0,
             panel_awake: true,
             select_presses: 0,
@@ -104,6 +108,19 @@ impl AppState {
             self.apply_calendar(event);
         } else if route == ScreenRoute::UnitConverter {
             self.apply_unit_converter(event);
+        } else if matches!(
+            route,
+            ScreenRoute::ContinueReading
+                | ScreenRoute::Library
+                | ScreenRoute::Bookmarks
+                | ScreenRoute::ReaderBookmarks
+                | ScreenRoute::ReaderLoading
+                | ScreenRoute::ReaderPage
+                | ScreenRoute::ReaderOptions
+                | ScreenRoute::ReaderPreferences
+                | ScreenRoute::ReaderToc
+        ) {
+            self.apply_reader(event);
         } else if route.is_placeholder() {
             // Placeholders are intentionally inert. Hierarchical navigation is
             // consistently handled by the dedicated GPIO0 BOOT long press.
@@ -174,6 +191,7 @@ impl AppState {
                 _ => {}
             }
         }
+        self.sync_reader_orientation_for_active_route();
     }
 
     fn apply_home(&mut self, event: ButtonEvent) {
@@ -218,7 +236,14 @@ impl AppState {
                 if target == ScreenRoute::Calendar {
                     self.initialize_calendar_if_needed();
                 }
-                self.router.navigate_to(target);
+                if target == ScreenRoute::Library {
+                    self.reader.refresh_library();
+                }
+                if target == ScreenRoute::ContinueReading && self.reader.session.is_some() {
+                    self.router.navigate_to(ScreenRoute::ReaderPage);
+                } else {
+                    self.router.navigate_to(target);
+                }
             }
         }
     }
@@ -249,6 +274,104 @@ impl AppState {
                 self.unit_converter.select_next_field();
             }
         }
+    }
+
+    fn apply_reader(&mut self, event: ButtonEvent) {
+        match self.router.current() {
+            ScreenRoute::ContinueReading => {
+                if event == ButtonEvent::Select {
+                    self.note_select_press();
+                    if self.reader.session.is_some() {
+                        self.router.navigate_to(ScreenRoute::ReaderPage);
+                    } else if self.reader.request_continue() {
+                        self.router.navigate_to(ScreenRoute::ReaderLoading);
+                    } else {
+                        self.reader.refresh_library();
+                        self.router.navigate_to(ScreenRoute::Library);
+                    }
+                }
+            }
+            ScreenRoute::Library => {
+                if event == ButtonEvent::Select {
+                    self.note_select_press();
+                }
+                if self.reader.apply_library_button(event) {
+                    self.router.navigate_to(ScreenRoute::ReaderLoading);
+                }
+            }
+            ScreenRoute::Bookmarks | ScreenRoute::ReaderBookmarks => {
+                if event == ButtonEvent::Select {
+                    self.note_select_press();
+                }
+                if self.reader.apply_bookmarks_button(event) {
+                    self.router.navigate_to(ScreenRoute::ReaderLoading);
+                }
+            }
+            ScreenRoute::ReaderToc | ScreenRoute::ReaderLoading => {}
+            ScreenRoute::ReaderPage => match event {
+                ButtonEvent::Up => self.reader.previous_page(),
+                ButtonEvent::Down => self.reader.next_page(),
+                ButtonEvent::Select => {
+                    self.note_select_press();
+                    self.reader.options_selected = 0;
+                    self.router.navigate_to(ScreenRoute::ReaderOptions);
+                }
+            },
+            ScreenRoute::ReaderOptions => match event {
+                ButtonEvent::Up => self.reader.cycle_option_previous(),
+                ButtonEvent::Down => self.reader.cycle_option_next(),
+                ButtonEvent::Select => {
+                    self.note_select_press();
+                    match self.reader.selected_option() {
+                        ReaderOption::Bookmark => self.reader.toggle_current_bookmark(),
+                        ReaderOption::Bookmarks => {
+                            self.reader.bookmarks_selected = 0;
+                            self.router.navigate_to(ScreenRoute::ReaderBookmarks);
+                        }
+                        ReaderOption::TableOfContents => {
+                            self.router.navigate_to(ScreenRoute::ReaderToc)
+                        }
+                        ReaderOption::ReadingPreferences => {
+                            self.reader.begin_preferences_edit();
+                            self.router.navigate_to(ScreenRoute::ReaderPreferences);
+                        }
+                        ReaderOption::ClearGhosting => self.reader.request_clear_ghosting(),
+                        ReaderOption::GoToLibrary => {
+                            self.reader.refresh_library();
+                            self.router.navigate_to(ScreenRoute::Library);
+                        }
+                        ReaderOption::GoHome => self.router.back_home(),
+                    }
+                }
+            },
+            ScreenRoute::ReaderPreferences => match event {
+                ButtonEvent::Up => self.reader.cycle_preference_previous(),
+                ButtonEvent::Down => self.reader.cycle_preference_next(),
+                ButtonEvent::Select => {
+                    self.note_select_press();
+                    if self.reader.activate_selected_preference() {
+                        self.router.navigate_to(ScreenRoute::ReaderLoading);
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+
+    /// Advance one bounded Reader loading or nearby-cache stage. main.rs calls
+    /// this from the event loop so the loading screen is visible before reads.
+    pub fn tick_reader(&mut self) -> ReaderTickOutcome {
+        let outcome = self.reader.tick();
+        if outcome == ReaderTickOutcome::FirstPageReady {
+            self.router.navigate_to(ScreenRoute::ReaderPage);
+        }
+        self.sync_reader_orientation_for_active_route();
+        outcome
+    }
+
+    #[must_use]
+    pub fn take_reader_clear_ghost_request(&mut self) -> bool {
+        self.reader.take_clear_ghost_request()
     }
 
     fn apply_display(&mut self, event: ButtonEvent) {
@@ -324,7 +447,30 @@ impl AppState {
     /// Navigate one level toward Home. The hardware runtime calls this after a
     /// validated GPIO0 BOOT-button long press.
     pub fn back(&mut self) {
-        self.router.back();
+        if self.router.current() == ScreenRoute::ReaderLoading {
+            self.reader.cancel_loading();
+        }
+        if self.router.current() == ScreenRoute::ReaderPreferences {
+            if self.reader.finish_preferences_edit() {
+                self.router.navigate_to(ScreenRoute::ReaderLoading);
+            } else {
+                self.router.navigate_to(ScreenRoute::ReaderOptions);
+            }
+        } else {
+            self.router.back();
+        }
+        self.sync_reader_orientation_for_active_route();
+    }
+
+    fn sync_reader_orientation_for_active_route(&mut self) {
+        self.orientation = if self.router.current() == ScreenRoute::ReaderPage {
+            match self.reader.preferences.orientation {
+                ReaderOrientation::Portrait => DisplayOrientation::Portrait,
+                ReaderOrientation::Landscape => DisplayOrientation::Landscape,
+            }
+        } else {
+            DisplayOrientation::Portrait
+        };
     }
 
     #[must_use]
@@ -476,14 +622,43 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_uses_hierarchical_back_instead_of_select() {
+    fn reader_continue_shell_routes_to_library_when_no_session() {
         let mut state = AppState::default();
         state.apply(ButtonEvent::Select);
         state.apply(ButtonEvent::Select);
         assert_eq!(state.active_route(), ScreenRoute::ContinueReading);
         state.apply(ButtonEvent::Select);
-        assert_eq!(state.active_route(), ScreenRoute::ContinueReading);
+        assert_eq!(state.active_route(), ScreenRoute::Library);
         state.back();
         assert_eq!(state.active_route(), ScreenRoute::Reader);
+    }
+
+    #[test]
+    fn reader_preferences_use_settings_style_move_then_select_change() {
+        use crate::reader::{ReadingPreference, ReadingTheme};
+
+        let mut state = AppState::default();
+        state.router.navigate_to(ScreenRoute::ReaderPreferences);
+        assert_eq!(
+            state.reader.selected_preference(),
+            ReadingPreference::ReadingTheme
+        );
+        let initial_theme = state.reader.preferences.theme;
+        state.apply(ButtonEvent::Down);
+        assert_eq!(
+            state.reader.selected_preference(),
+            ReadingPreference::Orientation
+        );
+        assert_eq!(state.reader.preferences.theme, initial_theme);
+        state.apply(ButtonEvent::Up);
+        assert_eq!(
+            state.reader.selected_preference(),
+            ReadingPreference::ReadingTheme
+        );
+        state.apply(ButtonEvent::Select);
+        assert_eq!(state.reader.preferences.theme, ReadingTheme::HighContrast);
+        assert_eq!(state.active_route(), ScreenRoute::ReaderPreferences);
+        state.back();
+        assert_eq!(state.active_route(), ScreenRoute::ReaderOptions);
     }
 }

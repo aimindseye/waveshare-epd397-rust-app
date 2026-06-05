@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "waveshare-epd397-rust-app"
-version = "0.15.0"
+version = "0.16.8"
 dependencies = [
  "anyhow",
  "embedded-graphics",

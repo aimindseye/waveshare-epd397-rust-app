@@ -57,6 +57,7 @@ mod firmware {
             PowerKeyEvent, SleepWakeGuard, SleepWakeGuardDecision, POWER_KEY_POLL_MS,
             POWER_KEY_WAKE_GUARD_QUIET_MS,
         },
+        reader::ReaderTickOutcome,
         regional::RegionalPreferences,
         rtc::RtcDateTime,
         rtc_alarm_interrupt::{espidf::RtcAlarmInterruptMonitor, RTC_ALARM_INTERRUPT_GPIO},
@@ -308,6 +309,17 @@ mod firmware {
         let mut frame = FrameBuffer::new_white();
         let mut state = AppState::default();
         state.display = display_preferences;
+        let reader_persistence = state.reader.load_persistent_state();
+        state.reader.refresh_library();
+        info!(
+            "rustmix-wave=reader-persistence-load state-loaded={} preferences-loaded={} positions={} recent={} bookmarks={} warning={}",
+            reader_persistence.state_loaded,
+            reader_persistence.preferences_loaded,
+            reader_persistence.position_count,
+            reader_persistence.recent_count,
+            reader_persistence.bookmark_count,
+            reader_persistence.warning.as_deref().unwrap_or("none")
+        );
         let mut sleep_images = SleepImageCatalog::default();
         let mut sleep_mode = SleepModeState::default();
         let mut sleep_wake_guard = SleepWakeGuard::default();
@@ -444,6 +456,23 @@ mod firmware {
         info!("rustmix-wave=unit-converter-foundation-ready categories=length,mass,temperature,volume mode=offline fixed-point=true precision=thousandths");
         info!("rustmix-wave=unit-converter-navigation-ready fields=category,from-unit,value,to-unit,step-size back=boot-long-press");
         info!("rustmix-wave=unit-converter-host-tests-ready coverage=length,mass,temperature,volume,bounds");
+        info!("rustmix-wave=reader-library-txt-foundation-ready path=/sdcard/RUSTMIX/BOOKS formats=txt,epub-placeholder encoding=utf8,bom,windows-1252 opening=staged-first-page-first cache=ram-nearby-pages");
+        info!("rustmix-wave=reader-state-persistence-ready path=/sdcard/RUSTMIX/READER files=STATE.TXT,POSITS.TXT,RECENT.TXT,MARKS.TXT cache=CACHE atomic-replace=tmp-primary-backup fallback=corrupt-record-safe");
+        info!("rustmix-wave=reader-bookmarks-ready add-remove=true list=true recent=true continue-reading=true cache-fingerprint=path,size,modified,format,layout");
+        info!("rustmix-wave=reader-loading-ui-ready stages=open,encoding,resume,first-page,cache cancel=boot-long-press refresh=coarse-stage-boundaries");
+        info!("rustmix-wave=reader-options-shell-ready toc=visible-none-for-txt bookmarks=persistent clear-ghosting=manual-global-refresh");
+        info!("rustmix-wave=reader-ux-repair-ready menu=continue,library,bookmarks-ready normalization=utf8-punctuation,latin1,underscore-emphasis byte-offsets=preserved");
+        info!("rustmix-wave=reader-preferences-ready path=/sdcard/RUSTMIX/READER/PREFS.TXT theme=classic,high-contrast orientation=portrait,landscape font-size=small,medium,large,xlarge book-font=inter,atkinson-hyperlegible,serif paragraph-alignment=justified,left,center,right show-progress=on,off atomic-replace=tmp-primary-backup");
+        info!("rustmix-wave=reader-high-contrast-layout-ready viewport=shared border=outside-text top-padding=true clip=right,bottom theme-change=redraw-only ghost-refresh=global-base");
+        info!("rustmix-wave=reader-txt-emphasis-cleanup-ready multiline-gutenberg=true word-internal-underscores=preserved repeated-separators=preserved byte-offsets=preserved");
+        info!("rustmix-wave=reader-per-book-resume-ready path=/sdcard/RUSTMIX/READER/POSITS.TXT records=64 fingerprint=path,size,modified,format atomic-replace=tmp-primary-backup routes=continue,books,files,bookmark");
+        info!("rustmix-wave=reader-controls-alignment-ready navigation=up-down-move-select-activate preferences=up-down-move-select-change back=boot-long-press");
+        info!("rustmix-wave=reader-options-split-ready actions=bookmark,toc,preferences,clear-ghosting,library,home editor=theme,orientation,font-size,font,paragraph-alignment,show-progress");
+        info!("rustmix-wave=reader-preferences-settings-navigation-ready move=up-down change=select back=boot-long-press persistence=immediate rows=theme,orientation,font-size,font,paragraph-alignment,show-progress");
+        info!("rustmix-wave=reader-fat83-persistence-ready positions=POSITS.TXT legacy-read=POSITIONS.TXT cache-basename=8hex extensions=CCH,TMP,BAK atomic-replace=true");
+        info!("rustmix-wave=reader-fat83-runtime-ready positions-write=POSITS.TXT legacy-read=POSITIONS.TXT cache-write=8hex-no-prefix extensions=CCH,TMP,BAK duplicate-degraded-log=suppressed");
+        info!("rustmix-wave=reader-bookmark-page-labels-ready anchor=byte-offset display=page-number layout-aware=true fallback=stored-page");
+        info!("rustmix-wave=library-bookmark-tab-rendering-ready status=saved-marks source=MARKS.TXT rows=title,page-number anchors=byte-offset page-label=layout-aware-fallback-stored books-files=txt-open preserved=true");
         info!("rustmix-wave=hierarchical-router-ready policy=category-subcategory-feature-details");
 
         let mut last_activity = Instant::now();
@@ -451,6 +480,7 @@ mod firmware {
         let mut last_alarm_poll = Instant::now();
         let mut last_power_key_poll = Instant::now();
         let mut last_weather_attempt: Option<Instant> = None;
+        let mut last_reader_tick = Instant::now();
         let mut weather_retry = WeatherRetryState::default();
         loop {
             if state.panel_awake
@@ -848,6 +878,55 @@ mod firmware {
                 }
             }
 
+            if !sleep_mode.is_sleeping()
+                && matches!(
+                    state.active_route(),
+                    ScreenRoute::ReaderLoading | ScreenRoute::ReaderPage
+                )
+                && last_reader_tick.elapsed() >= Duration::from_millis(250)
+            {
+                let previous_route = state.active_route();
+                let outcome = state.tick_reader();
+                match outcome {
+                    ReaderTickOutcome::LoadingStageChanged => {
+                        info!(
+                            "rustmix-wave=reader-cache-stage route={} stage={}",
+                            state.active_route().marker(),
+                            state
+                                .reader
+                                .loading_stage()
+                                .map_or("none", |stage| stage.label())
+                        );
+                    }
+                    ReaderTickOutcome::FirstPageReady => {
+                        info!("rustmix-wave=reader-first-page-ready route={} cache-policy=lazy-nearby-pages", state.active_route().marker());
+                    }
+                    ReaderTickOutcome::BackgroundCacheAdvanced => {
+                        if let Some(session) = state.reader.session.as_ref() {
+                            info!("rustmix-wave=reader-background-cache indexed-percent={} pages={} complete={}", session.progress_percent(), session.page_offsets.len(), session.index_complete);
+                        }
+                    }
+                    ReaderTickOutcome::Failed => {
+                        warn!(
+                            "rustmix-wave=reader-cache-stage status=failed route={}",
+                            state.active_route().marker()
+                        );
+                    }
+                    ReaderTickOutcome::None => {}
+                }
+                log_reader_persistence_event(&mut state);
+                if state.panel_awake
+                    && (outcome == ReaderTickOutcome::LoadingStageChanged
+                        || outcome == ReaderTickOutcome::FirstPageReady
+                        || outcome == ReaderTickOutcome::Failed
+                        || state.active_route() != previous_route)
+                {
+                    refresh_screen(&mut panel, &mut frame, &mut state, RefreshRequest::Normal)?;
+                    last_activity = Instant::now();
+                }
+                last_reader_tick = Instant::now();
+            }
+
             let live_refresh_seconds = match state.active_route() {
                 ScreenRoute::Motion | ScreenRoute::MotionDetails => MOTION_LIVE_REFRESH_SECONDS,
                 ScreenRoute::Network | ScreenRoute::NetworkDetails => NETWORK_LIVE_REFRESH_SECONDS,
@@ -970,6 +1049,7 @@ mod firmware {
                         log_storage_snapshot(&state.storage);
                     }
                 }
+                log_reader_persistence_event(&mut state);
                 if state.display != previous_display {
                     match state.display.save_to_path(DISPLAY_CONFIG_PATH) {
                         Ok(()) => info!(
@@ -991,8 +1071,11 @@ mod firmware {
                         state.active_route().marker()
                     );
                 }
+                let reader_clear_ghost = state.take_reader_clear_ghost_request();
                 let request = if woke_from_sleep {
                     RefreshRequest::ForceGlobalAfterWake
+                } else if reader_clear_ghost {
+                    RefreshRequest::ForceGlobalManual
                 } else {
                     RefreshRequest::Normal
                 };
@@ -1344,6 +1427,7 @@ mod firmware {
     enum RefreshRequest {
         Normal,
         ForceGlobalAfterWake,
+        ForceGlobalManual,
     }
 
     fn refresh_screen<SPI, DC, RST, CS, BUSY, DELAY, POWER>(
@@ -1367,8 +1451,10 @@ mod firmware {
         POWER: waveshare_epd397_rust_app::power::PanelPower,
     {
         let force_global_after_wake = request == RefreshRequest::ForceGlobalAfterWake;
-        let use_global_refresh =
-            force_global_after_wake || state.partial_refreshes >= PARTIAL_REFRESH_LIMIT;
+        let force_global_manual = request == RefreshRequest::ForceGlobalManual;
+        let use_global_refresh = force_global_after_wake
+            || force_global_manual
+            || state.partial_refreshes >= PARTIAL_REFRESH_LIMIT;
         state.partial_refreshes = if use_global_refresh {
             0
         } else {
@@ -1380,6 +1466,8 @@ mod firmware {
             panel.show_base(frame.as_bytes())?;
             if force_global_after_wake {
                 info!("rustmix-wave=wake-global-refresh");
+            } else if force_global_manual {
+                info!("rustmix-wave=reader-clear-ghosting refresh=global-base");
             } else {
                 info!("rustmix-wave=global-refresh-after-partials");
             }
@@ -1387,6 +1475,12 @@ mod firmware {
             panel.show_partial_fullscreen(frame.as_bytes())?;
         }
         Ok(())
+    }
+
+    fn log_reader_persistence_event(state: &mut AppState) {
+        if let Some(event) = state.reader.take_persistence_event() {
+            info!("rustmix-wave=reader-persistence {event}");
+        }
     }
 
     fn log_sleep_image_selection(selection: &SleepImageSelection) {

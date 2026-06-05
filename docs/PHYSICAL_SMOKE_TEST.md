@@ -1,54 +1,38 @@
-# v0.15.0 physical smoke test
+# RustMix Wave v0.16.4 consolidated physical smoke test
 
-Run this checklist after flashing a release build.
+1. Validate, host-test, build and flash the firmware.
+2. Confirm `version=0.16.8 milestone=library-bookmark-tab-rendering-alignment`.
+3. Copy at least one TXT book into `/RUSTMIX/BOOKS`.
+4. Open `Reader > Library`, open the TXT file and confirm the staged loading screen appears before page one.
+5. Advance at least two pages and return to Home. Reboot the device.
+6. Open `Reader > Continue Reading` and confirm the saved page restores.
+7. Open `Reader > Library`, cycle to `Recent`, and confirm the saved book is listed.
+8. Open the TXT page, select Reader Options, add a bookmark and confirm the page status becomes `MARKED`.
+9. Open Reader Options > Bookmarks and confirm the saved mark opens.
+10. Remove the same bookmark and confirm the bookmark list becomes empty.
+11. Confirm `/RUSTMIX/READER/STATE.TXT`, `POSITS.TXT`, `RECENT.TXT`, `MARKS.TXT` and `CACHE/<8HEX>.CCH` exist.
+12. Temporarily rename a primary Reader state file to its `.BAK` sibling and confirm startup remains non-fatal.
+13. Confirm TOC remains visible and reports `NONE` for TXT.
+14. Confirm Clear Ghosting performs a global refresh.
+15. Enter Power-key sleep from a TXT page, wait for the wake guard, wake again and confirm the Reader page restores.
+16. Confirm Calendar, Unit Converter, alarms, random sleep images and network restoration remain intact.
 
-## Boot and Home
 
-- [ ] Firmware logs `version=0.15.0 milestone=unit-converter-foundation`.
-- [ ] Home shows the simplified dark header.
-- [ ] Localized date and time are visible.
-- [ ] Weather, battery and Wi-Fi summary values are visible.
-- [ ] Reader, Productivity, Games, Tools and Settings cards navigate correctly.
+## Reader UX preferences
 
-## Calendar
+Run `docs/V0.16.4-PHYSICAL-SMOKE-TEST.md` after flashing v0.16.4.
 
-- [ ] Open `Productivity > Calendar`.
-- [ ] Current localized date is highlighted.
-- [ ] UP / DOWN moves through days in Day mode.
-- [ ] SELECT toggles Month mode.
-- [ ] Month navigation crosses a year boundary.
-- [ ] Hold BOOT and confirm return to Productivity.
+## v0.16.7 Reader FAT 8.3 runtime and bookmark labels
 
-## Unit Converter
+- Turn pages and confirm no `os error 22` Reader cache messages.
+- Confirm `POSITS.TXT` and `<8HEX>.CCH` files appear on the SD card.
+- Add two marks in one book and confirm distinct `PAGE` values in Bookmarks.
 
-- [ ] Open `Tools > Unit Converter`.
-- [ ] Confirm default `5 mi → 8.047 km` conversion.
-- [ ] Verify `32 F → 0 C`.
-- [ ] Verify `1 gal → 3.785 L`.
-- [ ] Cycle `0.1`, `1`, `10` and `100` step sizes.
-- [ ] Hold BOOT and confirm return to Tools.
+## v0.16.8 Library bookmark-tab rendering
 
-## Settings and services
-
-- [ ] Open Display and change UI family and size.
-- [ ] Reboot and confirm `/RUSTMIX/DISPLAY.TXT` persistence.
-- [ ] Open Audio and play the test chime.
-- [ ] Open Alarms and confirm schedule list, snooze and dismiss paths.
-- [ ] Open Environment and Motion and confirm sensor values update.
-- [ ] Open Network and confirm Wi-Fi and SNTP status.
-
-## Sleep-image mode
-
-- [ ] Enter sleep from Home with one short Power-key press.
-- [ ] Confirm a random BMP renders.
-- [ ] Confirm stale entry-press event is suppressed during the `900 ms` quiet window.
-- [ ] Leave the sleep image visible for at least five seconds.
-- [ ] Press Power again and confirm Home restores.
-- [ ] Repeat from Calendar and Unit Converter; confirm active-route restoration.
-- [ ] Enter sleep twice and confirm consecutive images do not repeat when multiple valid BMP files exist.
-- [ ] Confirm Wi-Fi, SNTP and Weather pause during sleep and resume after wake.
-
-## Known Weather behavior
-
-- [ ] If Open-Meteo fails, confirm non-blocking retry markers for `2`, `5` and `15` seconds.
-- [ ] Confirm UI navigation remains responsive while a retry is pending.
+- Add two bookmarks in the same TXT book on different pages.
+- Open `Reader > Library > Bookmarks` and confirm the status strip reports `<n> saved / MARKS.TXT`.
+- Confirm each row renders `PAGE N`, including distinct numbers for multiple marks from the same book.
+- Select each Library bookmark row and confirm it opens the explicit saved passage.
+- Cycle back to Books and Files and confirm rows still render `TXT / OPEN`.
+- Confirm the EPUB-placeholder note is absent on Bookmarks but remains present on Books and Files.

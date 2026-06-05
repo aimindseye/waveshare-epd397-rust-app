@@ -11,17 +11,20 @@ pub const PRODUCT_SLUG: &str = "rustmix-wave-epd397";
 /// Cargo semantic version for the current firmware package.
 pub const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Stable milestone identifier for acceptance logs and diagnostics.
-pub const UI_SHELL_MILESTONE: &str = "unit-converter-foundation";
+pub const UI_SHELL_MILESTONE: &str = "library-bookmark-tab-rendering-alignment";
 
 #[cfg(test)]
 mod tests {
     use super::{FIRMWARE_VERSION, PRODUCT_NAME, PRODUCT_SLUG, UI_SHELL_MILESTONE};
 
     #[test]
-    fn exposes_unit_converter_foundation_metadata() {
+    fn exposes_library_bookmark_tab_rendering_alignment_metadata() {
         assert_eq!(PRODUCT_NAME, "Rustmix Wave / EPD397");
         assert_eq!(PRODUCT_SLUG, "rustmix-wave-epd397");
-        assert_eq!(FIRMWARE_VERSION, "0.15.0");
-        assert_eq!(UI_SHELL_MILESTONE, "unit-converter-foundation");
+        assert_eq!(FIRMWARE_VERSION, "0.16.8");
+        assert_eq!(
+            UI_SHELL_MILESTONE,
+            "library-bookmark-tab-rendering-alignment"
+        );
     }
 }
