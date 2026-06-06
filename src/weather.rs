@@ -668,6 +668,7 @@ pub mod espidf {
     };
 
     use crate::{
+        runtime_worker::{run_named_worker, NamedWorkerError},
         weather::{
             parse_open_meteo_response, WeatherData, WeatherFetchError, MAX_WEATHER_RESPONSE_BYTES,
             WEATHER_HTTP_TIMEOUT_SECONDS,
@@ -675,8 +676,54 @@ pub mod espidf {
         weather_config::WeatherConfig,
     };
 
+    /// Stack budget for one short-lived HTTPS worker. The ESP-IDF TLS path and
+    /// bounded response buffer no longer consume the firmware main task's
+    /// deliberately small orchestration stack.
+    pub const WEATHER_FETCH_WORKER_STACK_BYTES: usize = 64 * 1024;
+
+    /// Fetch one bounded HTTPS payload on a short-lived dedicated worker. The
+    /// main-loop retry policy remains synchronous and deterministic, while TLS
+    /// certificate validation, response reads and JSON parsing receive an
+    /// explicit stack budget independent from the firmware main task.
+    pub fn fetch_open_meteo_on_worker(
+        config: &WeatherConfig,
+    ) -> Result<WeatherData, WeatherFetchError> {
+        let config = config.clone();
+        log::info!(
+            "rustmix-wave=weather-fetch-worker status=starting stack-bytes={}",
+            WEATHER_FETCH_WORKER_STACK_BYTES
+        );
+        let result = match run_named_worker(
+            "weather-fetch",
+            WEATHER_FETCH_WORKER_STACK_BYTES,
+            move || fetch_open_meteo(&config),
+        ) {
+            Ok(data) => Ok(data),
+            Err(NamedWorkerError::Operation(error)) => Err(error),
+            Err(error) => {
+                let error = WeatherFetchError::Transport(format!("weather fetch worker {error}"));
+                log::warn!(
+                    "rustmix-wave=weather-fetch-worker status=boundary-failed error={error}"
+                );
+                Err(error)
+            }
+        };
+        match &result {
+            Ok(data) => log::info!(
+                "rustmix-wave=weather-fetch-worker status=completed forecast-days={}",
+                data.forecast.len()
+            ),
+            Err(error) => log::warn!(
+                "rustmix-wave=weather-fetch-worker status=failed classification={} error={error}",
+                error.category()
+            ),
+        }
+        result
+    }
+
     /// Fetch one bounded HTTPS weather payload. A new client is constructed per
     /// request so a failed transport cannot poison later refresh attempts.
+    #[inline(never)]
     pub fn fetch_open_meteo(config: &WeatherConfig) -> Result<WeatherData, WeatherFetchError> {
         let http_config = HttpConfiguration {
             crt_bundle_attach: Some(sys::esp_crt_bundle_attach),

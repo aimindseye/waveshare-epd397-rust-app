@@ -1,12 +1,16 @@
-//! ESP-IDF playback runtime for the ES8311 codec and I2S TX channel.
+//! ESP-IDF playback and Voice Notes runtime for the ES8311 codec and bidirectional I2S0 channel.
 
 use anyhow::{anyhow, Result};
 use embedded_hal::{delay::DelayNs, i2c::I2c};
 use es8311::{ClockConfig, Resolution};
 use esp_idf_svc::hal::{
-    delay::BLOCK,
+    delay::{BLOCK, NON_BLOCK},
     gpio::{Output, PinDriver},
-    i2s::{I2sDriver, I2sTx},
+    i2s::{I2sBiDir, I2sDriver},
+};
+
+use crate::voice_notes::{
+    apply_pcm16_gain_in_place, expand_pcm16_mono_to_stereo, VoiceCaptureMetrics, VoiceMicGain,
 };
 
 use super::{
@@ -23,7 +27,7 @@ pub struct AudioRuntime<'d, I2C> {
     bus: I2C,
     codec: BoardEs8311,
     profile: CodecProfileSnapshot,
-    tx: I2sDriver<'d, I2sTx>,
+    tx: I2sDriver<'d, I2sBiDir>,
     amplifier: PinDriver<'d, Output>,
     snapshot: AudioSnapshot,
     chime: ChimeGenerator,
@@ -36,7 +40,7 @@ where
 {
     pub fn initialize<D>(
         mut bus: I2C,
-        tx: I2sDriver<'d, I2sTx>,
+        tx: I2sDriver<'d, I2sBiDir>,
         mut amplifier: PinDriver<'d, Output>,
         delay: &mut D,
     ) -> Result<Self>
@@ -178,6 +182,94 @@ where
         Ok(false)
     }
 
+    pub fn begin_voice_note_playback(&mut self) -> Result<()> {
+        self.chime.stop();
+        self.codec
+            .mute(&mut self.bus, false)
+            .map_err(|error| anyhow!("failed to unmute ES8311 for voice note: {error:?}"))?;
+        if let Err(error) = self.amplifier.set_high() {
+            let _ = self.codec.mute(&mut self.bus, true);
+            return Err(anyhow!("failed to enable audio amplifier: {error:?}"));
+        }
+        self.snapshot.amplifier_enabled = true;
+        self.snapshot.muted = false;
+        self.snapshot.playback_state = AudioPlaybackState::PlayingVoiceNote;
+        self.snapshot.error = None;
+        Ok(())
+    }
+
+    pub fn write_voice_pcm16_mono(&mut self, mono: &[u8], stereo: &mut [u8]) -> Result<()> {
+        if self.snapshot.playback_state != AudioPlaybackState::PlayingVoiceNote {
+            return Err(anyhow!("voice-note playback is not active"));
+        }
+        let stereo_bytes = expand_pcm16_mono_to_stereo(mono, stereo)?;
+        self.tx
+            .write_all(&stereo[..stereo_bytes], BLOCK)
+            .map_err(|error| anyhow!("I2S voice-note TX write failed: {error:?}"))
+    }
+
+    pub fn finish_voice_note_playback(&mut self) -> Result<()> {
+        self.stop_playback()
+    }
+
+    pub fn begin_voice_recording(&mut self) -> Result<()> {
+        self.chime.stop();
+        self.amplifier
+            .set_low()
+            .map_err(|error| anyhow!("failed to disable audio amplifier: {error:?}"))?;
+        self.codec
+            .mute(&mut self.bus, true)
+            .map_err(|error| anyhow!("failed to mute ES8311 DAC before recording: {error:?}"))?;
+        self.snapshot.amplifier_enabled = false;
+        self.snapshot.muted = true;
+        self.snapshot.playback_state = AudioPlaybackState::RecordingVoiceNote;
+        self.snapshot.error = None;
+        Ok(())
+    }
+
+    pub fn finish_voice_recording(&mut self) -> Result<()> {
+        self.snapshot.playback_state = AudioPlaybackState::Muted;
+        self.snapshot.muted = true;
+        self.snapshot.amplifier_enabled = false;
+        Ok(())
+    }
+
+    pub fn read_voice_pcm_mono(
+        &mut self,
+        stereo: &mut [u8],
+        mono: &mut [u8],
+        gain: VoiceMicGain,
+    ) -> Result<VoiceCaptureMetrics> {
+        if stereo.len() < mono.len().saturating_mul(2) || mono.len() % 2 != 0 {
+            return Err(anyhow!("invalid voice PCM buffers"));
+        }
+        let bytes = match self.tx.read(stereo, NON_BLOCK) {
+            Ok(bytes) => bytes,
+            Err(error) if error.code() == esp_idf_svc::sys::ESP_ERR_TIMEOUT => {
+                return Ok(VoiceCaptureMetrics::default());
+            }
+            Err(error) => return Err(anyhow!("I2S RX read failed: {error:?}")),
+        };
+        let frames = (bytes / 4).min(mono.len() / 2);
+        for frame in 0..frames {
+            let source = frame * 4;
+            let target = frame * 2;
+            mono[target..target + 2].copy_from_slice(&stereo[source..source + 2]);
+        }
+        Ok(apply_pcm16_gain_in_place(&mut mono[..frames * 2], gain))
+    }
+
+    /// Drain one bounded I2S RX chunk while a voice-note recording is paused.
+    /// This keeps stale microphone frames out of the resumed WAV stream without
+    /// moving codec or DMA ownership away from the native main-loop runtime.
+    pub fn discard_voice_pcm(&mut self, stereo: &mut [u8]) -> Result<usize> {
+        match self.tx.read(stereo, NON_BLOCK) {
+            Ok(bytes) => Ok(bytes),
+            Err(error) if error.code() == esp_idf_svc::sys::ESP_ERR_TIMEOUT => Ok(0),
+            Err(error) => Err(anyhow!("I2S RX discard failed: {error:?}")),
+        }
+    }
+
     pub fn stop_playback(&mut self) -> Result<()> {
         self.chime.stop();
         self.amplifier
@@ -229,7 +321,9 @@ where
         self.codec
             .mute(&mut self.bus, muted)
             .map_err(|error| anyhow!("failed to change ES8311 mute state: {error:?}"))?;
-        if muted || !self.chime.is_playing() {
+        let voice_note_playing =
+            self.snapshot.playback_state == AudioPlaybackState::PlayingVoiceNote;
+        if muted || (!self.chime.is_playing() && !voice_note_playing) {
             self.amplifier
                 .set_low()
                 .map_err(|error| anyhow!("failed to disable audio amplifier: {error:?}"))?;
@@ -245,6 +339,8 @@ where
             AudioPlaybackState::PlayingAlarm
         } else if self.chime.mode() == ChimeMode::TestOnce {
             AudioPlaybackState::PlayingTestTone
+        } else if voice_note_playing {
+            AudioPlaybackState::PlayingVoiceNote
         } else if muted {
             AudioPlaybackState::Muted
         } else {

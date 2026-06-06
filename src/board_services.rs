@@ -187,14 +187,23 @@ where
         Ok(asserted)
     }
 
-    /// Enable PMIC short power-key event polling for sleep-image mode.
-    pub fn initialize_power_key_short_press(&mut self) -> anyhow::Result<()> {
-        self.power.initialize_power_key_short_press()
+    /// Enable PMIC short-menu and long-sleep Power-key event polling.
+    pub fn initialize_power_key_events(&mut self) -> anyhow::Result<()> {
+        self.power.initialize_power_key_events()
     }
 
     /// Return and clear one PMIC short power-key event when present.
     pub fn take_power_key_event(&mut self) -> anyhow::Result<Option<PowerKeyEvent>> {
         self.power.take_power_key_event()
+    }
+
+    /// Read one bounded QMI8658 sample without waking unrelated services.
+    /// The Motion Events screen uses this for its native 80 ms sampler.
+    pub fn read_imu_motion(&mut self) -> anyhow::Result<ImuReading> {
+        if !self.init_report.imu_available {
+            anyhow::bail!("QMI8658 service unavailable");
+        }
+        self.imu.read_motion()
     }
 
     /// Capture a best-effort status snapshot. Each optional field remains

@@ -1,4 +1,4 @@
-//! QMI8658-backed motion overview and readable diagnostics details.
+//! QMI8658-backed raw motion diagnostics and native event-bridge sample screen.
 
 use core::convert::Infallible;
 
@@ -19,6 +19,7 @@ use crate::{
         },
     },
     imu::{format_tenths, Axis3Tenths},
+    imu_events::{ImuEventBridge, IMU_EVENT_CONTROL_COUNT},
     orientation::OrientedFrameBuffer,
 };
 
@@ -76,8 +77,80 @@ pub fn render_motion(
         Text::new("QMI8658 unavailable", Point::new(42, 470), body).draw(display)?;
     }
 
-    draw_action(display, 640, "Motion details", body)?;
-    draw_footer(display, state.display, "SELECT DETAILS  HOLD BOOT BACK")?;
+    draw_action(display, 640, "Motion event bridge", body)?;
+    draw_footer(display, state.display, "SELECT EVENTS  HOLD BOOT BACK")?;
+    Ok(())
+}
+
+/// Draw debounced tilt, shake, rotate and level events plus threshold controls.
+pub fn render_motion_events(
+    display: &mut OrientedFrameBuffer<'_>,
+    state: &AppState,
+) -> Result<(), Infallible> {
+    let heading = state.display.heading_style();
+    let body = state.display.body_style();
+    let detail = state.display.detail_style();
+    let availability = if state.board.imu.is_some() {
+        "READY"
+    } else {
+        "NO IMU"
+    };
+    let latest = state.imu_events.latest_label();
+    let samples = format!("S {}", state.imu_events.samples);
+
+    draw_header(
+        display,
+        state.display,
+        "MOTION EVENTS",
+        "TILT SHAKE ROTATE LEVEL",
+    )?;
+    draw_status_row(
+        display,
+        state.display,
+        StatusRow {
+            left: availability,
+            middle: &latest,
+            right: &samples,
+        },
+    )?;
+
+    Text::new("Native event diagnostics", Point::new(22, 146), heading).draw(display)?;
+    line(display, 192, "Latest", &latest, body)?;
+    line(
+        display,
+        230,
+        "Counts",
+        &format!(
+            "T{} S{} R{} L{}",
+            state.imu_events.counters.tilt,
+            state.imu_events.counters.shake,
+            state.imu_events.counters.rotate,
+            state.imu_events.counters.level
+        ),
+        body,
+    )?;
+    Text::new(
+        "Raw QMI8658 stays behind Rust I2C.",
+        Point::new(22, 270),
+        detail,
+    )
+    .draw(display)?;
+
+    Text::new("Thresholds and debounce", Point::new(22, 322), heading).draw(display)?;
+    for index in 0..IMU_EVENT_CONTROL_COUNT {
+        draw_control(
+            display,
+            &state.imu_events,
+            index,
+            354 + index as i32 * 42,
+            body,
+        )?;
+    }
+    draw_footer(
+        display,
+        state.display,
+        "UP/DOWN ROW SELECT CHANGE HOLD BOOT BACK",
+    )?;
     Ok(())
 }
 
@@ -160,7 +233,12 @@ pub fn render_motion_details(
 
     Text::new("Profile", Point::new(22, 462), heading).draw(display)?;
     Text::new("+/-8 g and +/-512 dps", Point::new(22, 510), body).draw(display)?;
-    Text::new("Sample rate: 1000 Hz", Point::new(22, 550), body).draw(display)?;
+    Text::new(
+        "Sample rate: 1000 Hz sensor / 80 ms bridge",
+        Point::new(22, 550),
+        body,
+    )
+    .draw(display)?;
     Text::new(
         "Technical tokens remain compact.",
         Point::new(22, 612),
@@ -168,6 +246,29 @@ pub fn render_motion_details(
     )
     .draw(display)?;
     draw_footer(display, state.display, "HOLD BOOT BACK")?;
+    Ok(())
+}
+
+fn draw_control(
+    display: &mut OrientedFrameBuffer<'_>,
+    bridge: &ImuEventBridge,
+    index: usize,
+    y: i32,
+    style: UiTextStyle,
+) -> Result<(), Infallible> {
+    if index == bridge.selected_control {
+        Rectangle::new(Point::new(18, y - 27), Size::new(444, 36))
+            .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 3))
+            .draw(display)?;
+        Text::new(">", Point::new(28, y), style).draw(display)?;
+    }
+    Text::new(
+        ImuEventBridge::control_label(index),
+        Point::new(52, y),
+        style,
+    )
+    .draw(display)?;
+    Text::new(&bridge.control_value(index), Point::new(306, y), style).draw(display)?;
     Ok(())
 }
 
@@ -227,15 +328,16 @@ fn draw_action(
 
 #[cfg(test)]
 mod tests {
-    use super::{render_motion, render_motion_details};
+    use super::{render_motion, render_motion_details, render_motion_events};
     use crate::{app::AppState, framebuffer::FrameBuffer, orientation::OrientedFrameBuffer};
 
     #[test]
-    fn motion_overview_and_details_render_without_imu() {
+    fn motion_overview_events_and_details_render_without_imu() {
         let mut frame = FrameBuffer::new_white();
         let mut display = OrientedFrameBuffer::new(&mut frame, Default::default());
         let state = AppState::default();
         render_motion(&mut display, &state).unwrap();
+        render_motion_events(&mut display, &state).unwrap();
         render_motion_details(&mut display, &state).unwrap();
     }
 }

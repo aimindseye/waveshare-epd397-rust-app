@@ -31,7 +31,7 @@ pub fn render_device_info(
     let body = state.display.body_style();
     let version = format!("v{FIRMWARE_VERSION}");
     let orientation = state.orientation.label();
-    let partials = format!("{} / 6", state.partial_refreshes);
+    let partials = format!("{} / 24", state.partial_refreshes);
 
     draw_header(
         display,
@@ -148,7 +148,7 @@ pub fn render_device_info_runtime(
     Text::new("Stable ownership", Point::new(22, 450), heading).draw(display)?;
     line(display, 498, "EPD busy", "GPIO3 / ALDO3 managed", body)?;
     line(display, 538, "Buttons", "UP4 SELECT5 DOWN6", body)?;
-    line(display, 578, "Power key", "PMIC PEK sleep", body)?;
+    line(display, 578, "Power key", "Short menu / hold sleep", body)?;
     line(display, 618, "RTC alarm", "GPIO45 active-low", body)?;
     Text::new(
         "Hold BOOT to return to page 2.",

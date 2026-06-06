@@ -33,7 +33,7 @@ const HOME_ENTRIES: [MenuEntry; MAIN_CATEGORY_COUNT] = [
     MenuEntry {
         label: "Games",
         subtitle: "E-paper friendly games",
-        badge: "TBD",
+        badge: "SD",
         route: ScreenRoute::Games,
     },
     MenuEntry {
@@ -74,23 +74,23 @@ const READER_ENTRIES: [MenuEntry; 3] = [
 const PRODUCTIVITY_ENTRIES: [MenuEntry; 2] = [
     MenuEntry {
         label: "Calendar",
-        subtitle: "Read-only RTC-localized month view",
+        subtitle: "US agenda and personal editor",
         badge: "READY",
         route: ScreenRoute::Calendar,
     },
     MenuEntry {
         label: "Voice Notes",
-        subtitle: "Microphone capture is deferred",
-        badge: "SOON",
+        subtitle: "Record PCM WAV notes to SD",
+        badge: "READY",
         route: ScreenRoute::VoiceNotes,
     },
 ];
 
 const GAMES_ENTRIES: [MenuEntry; 1] = [MenuEntry {
-    label: "TBD",
-    subtitle: "First e-paper game will be selected later",
-    badge: "SOON",
-    route: ScreenRoute::GamesTbd,
+    label: "SD Lua Apps",
+    subtitle: "SD-loaded apps with native canvas",
+    badge: "READY",
+    route: ScreenRoute::LuaApps,
 }];
 
 const TOOLS_ENTRIES: [MenuEntry; 3] = [
@@ -103,7 +103,7 @@ const TOOLS_ENTRIES: [MenuEntry; 3] = [
     MenuEntry {
         label: "Dictionary",
         subtitle: "Offline prefix lookup",
-        badge: "SOON",
+        badge: "READY",
         route: ScreenRoute::Dictionary,
     },
     MenuEntry {
@@ -243,6 +243,16 @@ mod tests {
     }
 
     #[test]
+    fn tools_contains_ready_dictionary() {
+        let tools = category_entries(ScreenRoute::Tools);
+        let dictionary = tools
+            .iter()
+            .find(|entry| entry.route == ScreenRoute::Dictionary)
+            .expect("Dictionary entry");
+        assert_eq!(dictionary.badge, "READY");
+    }
+
+    #[test]
     fn tools_contains_ready_unit_converter() {
         let tools = category_entries(ScreenRoute::Tools);
         let converter = tools
@@ -250,6 +260,16 @@ mod tests {
             .find(|entry| entry.route == ScreenRoute::UnitConverter)
             .expect("Unit Converter entry");
         assert_eq!(converter.badge, "READY");
+    }
+
+    #[test]
+    fn games_contains_ready_sd_lua_catalog() {
+        let games = category_entries(ScreenRoute::Games);
+        let catalog = games
+            .iter()
+            .find(|entry| entry.route == ScreenRoute::LuaApps)
+            .expect("SD Lua Apps entry");
+        assert_eq!(catalog.badge, "READY");
     }
 
     #[test]

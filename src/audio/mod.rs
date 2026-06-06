@@ -1,8 +1,8 @@
-//! Playback-only audio domain for the Waveshare ESP32-S3 e-Paper 3.97 board.
+//! Native audio domain for the Waveshare ESP32-S3 e-Paper 3.97 board.
 //!
-//! The product milestone intentionally keeps microphone capture, I2S RX,
-//! compressed-audio decoding and SD-backed music playback out of scope.  The
-//! host-testable state and tone generator live here; ESP-IDF wiring stays in
+//! Alarm/test-tone playback and Voice Notes microphone capture share one
+//! ES8311 / I2S0 owner. Compressed audio and SD-backed music playback remain
+//! out of scope. Host-testable state lives here; ESP-IDF wiring stays in
 //! [`espidf`].
 
 pub mod tone;
@@ -38,7 +38,7 @@ pub const AUDIO_WS_GPIO: u8 = 47;
 /// ESP32-S3 TX data output to the ES8311 DAC. The uploaded BSP names this
 /// signal `I2S_DATA_POUT` and routes it to GPIO48.
 pub const AUDIO_DOUT_GPIO: u8 = 48;
-/// ES8311 ADC data input back to the ESP32-S3. RX capture remains deferred.
+/// ES8311 ADC data input back to the ESP32-S3 for Voice Notes capture.
 pub const AUDIO_DIN_GPIO: u8 = 21;
 pub const AUDIO_AMP_ENABLE_GPIO: u8 = 39;
 
@@ -62,6 +62,8 @@ pub enum AudioPlaybackState {
     Ready,
     PlayingTestTone,
     PlayingAlarm,
+    PlayingVoiceNote,
+    RecordingVoiceNote,
     Error,
 }
 
@@ -74,6 +76,8 @@ impl AudioPlaybackState {
             Self::Ready => "READY",
             Self::PlayingTestTone => "TEST TONE",
             Self::PlayingAlarm => "ALARM CHIME",
+            Self::PlayingVoiceNote => "VOICE NOTE",
+            Self::RecordingVoiceNote => "VOICE RECORD",
             Self::Error => "ERROR",
         }
     }
@@ -123,6 +127,8 @@ impl AudioSnapshot {
             AudioPlaybackState::Ready => "READY",
             AudioPlaybackState::PlayingTestTone => "TEST",
             AudioPlaybackState::PlayingAlarm => "RING",
+            AudioPlaybackState::PlayingVoiceNote => "NOTE",
+            AudioPlaybackState::RecordingVoiceNote => "REC",
             AudioPlaybackState::Error => "ERROR",
         }
     }
@@ -131,6 +137,8 @@ impl AudioSnapshot {
     pub const fn alarm_label(&self) -> &'static str {
         match self.playback_state {
             AudioPlaybackState::PlayingAlarm => "Audible alarm chime is active.",
+            AudioPlaybackState::PlayingVoiceNote => "Saved voice-note playback owns the codec.",
+            AudioPlaybackState::RecordingVoiceNote => "Voice-note recording owns the codec.",
             AudioPlaybackState::Unavailable | AudioPlaybackState::Error => {
                 "Audio unavailable - visual alarm only."
             }

@@ -1,219 +1,240 @@
-# RustMix Wave for Waveshare ESP32-S3 e-Paper 3.97
+# Rustmix Wave for Waveshare ESP32-S3 E-Paper 3.97
 
-RustMix Wave is a modular Rust / ESP-IDF firmware project for the Waveshare ESP32-S3 3.97-inch e-paper board. The native panel is `800 × 480`; the product UI renders on a logical `480 × 800` portrait canvas.
+Rustmix Wave is a modular Rust / ESP-IDF firmware for the Waveshare ESP32-S3 3.97-inch e-paper board. The native panel is `800 × 480`; the product UI renders on a logical `480 × 800` portrait canvas.
 
-The current firmware release is **v0.17.0** (`reflowable-epub-foundation`). It extends the hardware-tested v0.16.8 product-shell baseline with bounded reflowable EPUB opening and EPUB TOC navigation.
+Current release: **v1.0.0** (`text-editor-layout-alignment`; screenshot documentation refresh).
 
-## Current functionality
+This repository is the cleaned source tree. Historical patch overlays, temporary ZIP archives, patch scripts, repair notes, and milestone-by-milestone smoke-test documents have been removed. Durable documentation is consolidated into this README and the small set of files under [`docs/`](docs/). A screenshot-driven operating guide is available at [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md), with reference images stored under [`screenshots/`](screenshots/).
 
-### Product shell
+## Highlights
 
-- Simplified dark Home header.
-- Localized date and time row.
-- Weather, battery and Wi-Fi summary strip.
-- Five high-contrast category cards:
-  - Reader
-  - Productivity
-  - Games
-  - Tools
-  - Settings
-- GPIO0 BOOT long-press hierarchical Back action.
-- Inter and Atkinson Hyperlegible UI families with Compact, Standard and Large size profiles.
-- Persistent display preferences from `/sdcard/RUSTMIX/DISPLAY.TXT`.
+- Rotary-first product shell with Reader, Productivity, Games, Tools, and Settings categories.
+- Physical **Power short press** opens a display-maintenance menu for manual ghost-clearing refresh.
+- Physical **Power long press** enters the accepted random sleep-image mode with network suspension and route restoration after wake.
+- Reader supports TXT and bounded reflowable EPUB files, TOC navigation, bookmarks, per-book resume, typography preferences, paragraph alignment, and FAT 8.3-safe persistence.
+- Voice Notes records PCM16 mono 16 kHz WAV files to SD, supports microphone gain, pause/resume, saved-note playback, titles, timestamps, delete confirmation, storage telemetry, and LAN export.
+- Native Dictionary reuses the Rustmix X4 prefix-shard SD pack and uses BOOT-short `NAV H` / `NAV V` keyboard-axis switching.
+- Native Calendar loads personal events and the U.S.-only 2026 pack, renders a daily agenda, and supports recovery-safe personal-event creation, editing, and deletion.
+- Wi-Fi transfer portal provides explicit LAN-only SD access with protected configuration paths and atomic file replacement.
+- RTC alarms, weather, unit conversion, file browsing, audio diagnostics, sensors, Lua apps, and native motion games remain available.
 
-### Applications and device screens
+## Hardware target
 
-| Category | Screen | Status |
-| --- | --- | --- |
-| Reader | Continue Reading, Library, Bookmarks | Ready: TXT and bounded reflowable EPUB library, EPUB TOC navigation, normalized text rendering, Reader preferences with Inter, Atkinson, Serif and Literata body fonts, persistent resume, Recent, bookmarks and TXT SD-backed anchor cache |
-| Productivity | Calendar | Ready: RTC-localized, read-only monthly view |
-| Productivity | Voice Notes | Placeholder route; microphone capture deferred |
-| Games | TBD | Placeholder route |
-| Tools | File Browser | Ready: bounded read-only SDMMC browser and text preview |
-| Tools | Dictionary | Placeholder route |
-| Tools | Unit Converter | Ready: offline fixed-point Length, Mass, Temperature and Volume conversions |
-| Settings | Alarms | Ready: RTC schedules, runtime edits, snooze and dismiss |
-| Settings | Audio | Ready: ES8311 playback diagnostics and audible chime |
-| Settings | Clock | Ready: localized RTC and power details |
-| Settings | Display | Ready: UI font family and size persistence |
-| Settings | Device Info | Ready: paginated firmware and board details |
-| Settings | Environment | Ready: SHTC3 temperature and humidity |
-| Settings | Motion | Ready: QMI8658 accelerometer and gyroscope |
-| Settings | Network | Ready: SD-provisioned Wi-Fi and SNTP status |
-| Settings | Weather | Ready with retries: Open-Meteo conditions and four-day forecast |
-
-
-### Reader TXT and reflowable EPUB UX, preferences, persistence and bookmarks
-
-`Reader > Library` scans `/sdcard/RUSTMIX/BOOKS` for `.TXT`, `.EPUB`, and short-name-safe `.EPU` books. TXT opening remains stage-based: the loading screen is rendered first, encoding is detected (`UTF-8`, UTF-8 BOM or Windows-1252 fallback), Unicode punctuation is normalized into the bounded printable-ASCII Reader atlas, the first page opens before the whole book is indexed, and nearby page anchors continue building lazily in RAM.
-
-EPUB opening now follows the same responsive first-page-first flow. `src/epub.rs` reads a bounded ZIP central directory, accepts stored and DEFLATE members, resolves `META-INF/container.xml`, parses one OPF manifest and spine, flattens XHTML chapters into a bounded UTF-8 reflow buffer, and exposes EPUB3 navigation or EPUB2 NCX records through `Reader Options > Table of Contents`. EPUB CSS, images, footnotes, hyperlinks, DRM, ZIP64 and fixed-layout rendering remain deferred.
-
-Reader-owned state persists under `/sdcard/RUSTMIX/READER`: `STATE.TXT` restores Continue Reading, `POSITS.TXT` stores bounded per-book resume anchors with read-only migration fallback from legacy `POSITIONS.TXT`, `RECENT.TXT` powers the Recent tab, `MARKS.TXT` stores page bookmarks, `PREFS.TXT` stores Reader theme, orientation, book font, size, paragraph alignment and progress choices, and `CACHE/<8HEX>.CCH` retains bounded TXT page anchors with layout-aware cache-fingerprint validation. EPUB resume and bookmarks reuse stable offsets inside the flattened EPUB text buffer while the source EPUB fingerprint remains unchanged. All Reader-generated writable filenames comply with FAT 8.3 naming, and writes use `.TMP` and `.BAK` replacement files so interrupted state updates can recover safely. The TOC row reports `NONE` for ordinary TXT files and `LIST` for EPUB books with navigation records.
-
-High Contrast and Classic now share one Reader body-content rectangle. The stronger High Contrast border is drawn outside that viewport, body glyphs are clipped at the right and bottom guards, and theme changes remain redraw-only with a global ghost-clearing refresh. TXT normalization also removes multiline Project Gutenberg `_..._` emphasis delimiters while preserving word-internal underscores and repeated underscore separator rows.
-
-Reading Preferences now follows the firmware Settings-style row interaction contract: UP / DOWN moves the highlighted preference row, SELECT changes only that row's value, and HOLD BOOT returns to Reader Options. Preference changes persist immediately; layout-sensitive changes continue to use the staged current-page rebuild path.
-
-`Reader > Library > Bookmarks` now presents saved marks with the same layout-aware `PAGE N` labels as the dedicated Bookmarks screen. The Library bookmark tab reports `MARKS.TXT`, keeps multiple marks from the same book as separate byte-anchor rows, and omits the unrelated EPUB-placeholder note. Books and Files retain their existing `TXT / OPEN` presentation.
-
-### Sleep-image mode
-
-A short AXP2101 Power-key press enters network-suspended sleep-image mode:
-
-1. Stop audio playback.
-2. Select a hardware-random `800 × 480`, 1-bpp BMP from `/sdcard/RUSTMIX/SLEEP`.
-3. Avoid immediately repeating the prior image when multiple valid BMP files exist.
-4. Stop SNTP, disconnect Wi-Fi and pause Weather.
-5. Render the sleep image, deep-sleep the e-paper panel and disable ALDO3.
-6. Suppress stale PMIC wake events for a `900 ms` quiet window.
-7. Restore the active route and reconnect services after a deliberate second Power-key press.
-
-The MCU event loop intentionally remains active so Power-key polling and GPIO45 RTC-alarm readiness continue to work.
-
-## Hardware summary
-
-| Function | Interface / GPIO |
+| Component | Contract |
 | --- | --- |
-| E-paper SCLK / MOSI / CS / DC / RST / BUSY | GPIO11 / GPIO12 / GPIO10 / GPIO9 / GPIO46 / GPIO3 |
-| PMIC and board-service I2C | SDA GPIO41, SCL GPIO42 |
-| Application buttons | UP GPIO4, SELECT GPIO5, DOWN GPIO6 |
-| BOOT Back action | GPIO0, active low, long press |
-| SDMMC | CLK GPIO16, CMD GPIO17, D0 GPIO15, D1 GPIO7, D2 GPIO8, D3 GPIO18 |
+| MCU | ESP32-S3 |
+| Display | Waveshare 3.97-inch SSD1677 e-paper, native `800 × 480` |
+| Product orientation | Logical portrait `480 × 800` |
+| Display SPI | SCLK GPIO11, MOSI GPIO12, CS GPIO10, DC GPIO9, RST GPIO46, BUSY GPIO3 |
+| SD storage | FAT SD card mounted at `/sdcard` |
+| BOOT button | GPIO0, short press contextual, long press hierarchical Back |
+| Power key | AXP2101 PEK interrupts: short opens display menu, long enters sleep-image mode |
 | RTC alarm interrupt | GPIO45, active low |
-| Audio TX | MCLK GPIO13, BCLK GPIO14, WS GPIO47, DOUT GPIO48 |
-| Audio amplifier enable | GPIO39 |
+| Audio | ES8311 codec and native I2S ownership |
+| Sensors | SHTC3 environment sensor, QMI8658 IMU |
 
-`GPIO3` is reserved for e-paper BUSY and must not be reused as an application input.
+See [`docs/BOARD_CONTRACT.md`](docs/BOARD_CONTRACT.md) for the stable board boundary.
+
+## Application status
+
+| Category | Application | Status |
+| --- | --- | --- |
+| Reader | Continue Reading, Library, Bookmarks | Ready: TXT and bounded reflowable EPUB |
+| Productivity | Calendar | Ready: U.S.-only agenda and personal-event editor |
+| Productivity | Voice Notes | Ready: record, pause/resume, playback, title, delete, export |
+| Games | SD Lua catalog | Ready: Hello Grid, Sudoku, Minesweeper, Tilt Maze, Motion 2048, Sokoban Tilt |
+| Tools | Dictionary | Ready: native X4 prefix-shard lookup |
+| Tools | File Browser | Ready: bounded read-only SD browser and text preview |
+| Tools | Unit Converter | Ready: offline fixed-point conversions |
+| Settings | Alarms | Ready: RTC schedules, snooze, dismiss |
+| Settings | Audio | Ready: codec diagnostics and chime |
+| Settings | Clock | Ready: RTC and power information |
+| Settings | Display | Ready: UI font family and size persistence |
+| Settings | Environment | Ready: temperature and humidity |
+| Settings | Motion | Ready: IMU diagnostics |
+| Settings | Network | Ready: Wi-Fi, SNTP, explicit LAN transfer portal |
+| Settings | Weather | Ready with bounded retries and last-known-good cache |
+
+## Sensor-driven utilities and motion games
+
+Rustmix Wave uses the board peripherals as product features rather than treating them as diagnostics only.
+
+| Hardware service | Firmware use |
+| --- | --- |
+| PCF85063 RTC | Localized clock, calendar date, persistent alarm schedules, and GPIO45 alarm wake |
+| AXP2101 PMIC | Battery and USB/charge status, e-paper rail support, and Power-key short/long interrupt classification |
+| SHTC3 environment sensor | Temperature and humidity cards, home status, and sensor details |
+| QMI8658 accelerometer and gyroscope | Live Motion diagnostics, debounced `TILT`, `SHAKE`, `ROTATE`, and `LEVEL` events, Tilt Maze, Motion 2048, and Sokoban Tilt |
+| ES8311 audio codec and I2S | Alarm chime, audio diagnostics, Voice Notes recording, and saved-WAV playback |
+| SDMMC storage | Reader library, Voice Notes, Dictionary shards, Calendar events, sleep images, Wi-Fi transfer, and SD-loaded app packs |
+| Wi-Fi and SNTP | Network status, RTC synchronization, weather fetch, and explicit LAN file transfer |
+
+The native IMU event bridge keeps raw QMI8658 I2C samples inside Rust. It converts fixed-point accelerometer and gyroscope snapshots into debounced events with release latching and cooldowns. Motion games receive those bounded native events rather than raw I2C access:
+
+- **Tilt Maze** maps planar tilt into maze movement.
+- **Motion 2048** maps tilt into swipe directions for tile slides and merges.
+- **Sokoban Tilt** maps tilt into player movement and crate pushes.
+
+See [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) for the screen-by-screen controls and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the sensor pipeline.
+
+## Main-task safety and worker isolation
+
+The ESP-IDF main task remains the narrow hardware-orchestration owner. It owns display refresh coordination, UI routing, and long-lived peripheral handles. Stack-heavy or blocking operations are isolated behind bounded workers or dedicated service tasks:
+
+| Operation | Isolation policy |
+| --- | --- |
+| EPUB parse | Short-lived `epub-parser` worker with a 64 KiB stack |
+| EPUB title lookup | Short-lived title worker with a 32 KiB stack |
+| Weather HTTPS fetch | Short-lived `weather-fetch` worker with a 64 KiB stack and bounded response payload |
+| Lua app open | Short-lived `lua-loader` worker with a 32 KiB stack |
+| Wi-Fi transfer portal | Explicitly started ESP-IDF HTTP server task with a 24 KiB stack and 4 KiB stream chunks |
+| Voice Notes capture and playback | Cooperative bounded I2S chunks while native `AudioRuntime` retains codec ownership |
+
+`AppState` is heap-boxed, runtime memory snapshots report main-stack high-water margin and internal/PSRAM heap state, and workers return compact results before terminating. Lua apps never receive panel SPI, raw I2C, networking, or long-lived hardware handles.
 
 ## Repository layout
 
 ```text
-src/
-├── app/                  # Product routes, state, typography, widgets and screens
-├── audio/                # ES8311 codec profile, I2S runtime and tone generator
-├── reader.rs             # Shared TXT / EPUB Reader sessions, preferences, pagination and persistence
-├── epub.rs               # Bounded EPUB ZIP, OPF, spine, XHTML reflow and TOC parser
-├── calendar.rs           # Hardware-independent Gregorian calendar math
-├── unit_converter.rs     # Offline fixed-point conversion domain
-├── weather.rs            # Open-Meteo parser, retry policy and last-known-good cache
-├── sleep_images.rs       # FAT-safe BMP scan and hardware-random anti-repeat selector
-├── sleep_network.rs      # Wi-Fi / SNTP / Weather suspension state
-├── power_key.rs          # AXP2101 Power-key policy and sleep-entry wake guard
-└── main.rs               # ESP-IDF wiring and event-loop orchestration
+.cargo/config.toml              ESP-IDF target, linker, runner, and environment
+.github/workflows/ci.yml        GitHub Actions format, static-contract, and host-test workflow
+src/                            Runtime, domain modules, app state, renderers, and host tests
+examples/sd-card/RUSTMIX/       FAT SD-card examples and smoke packs
+scripts/validate.sh             Formatting, source-contract, and native-target host tests
+scripts/build.sh                Validated ESP-IDF release build
+scripts/flash.sh                Build, flash, and monitor helper
+scripts/build-release-firmware.sh  Build an ELF-only release bundle and checksums
+scripts/flash-release.sh           Flash an existing release ELF safely
+scripts/test-release-flash-workflow.sh  Verify the ELF-only release bundle with fake tools
+scripts/package-release.sh      Create a GitHub-ready cleaned source archive
+docs/                           Consolidated durable documentation and screenshot-driven user guide
+screenshots/                    Reference UI screenshots linked by docs/USER_GUIDE.md
 ```
 
-## Build prerequisites
+The architecture and module ownership rules are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-The firmware uses the Rust-on-ESP-IDF `std` workflow. On macOS:
+## Prerequisites
 
-```bash
-xcode-select --install
-brew install cmake ninja dfu-util libusb python3
-```
+Install the ESP Rust toolchain, ESP-IDF build dependencies, and `espflash`. The repository selects the `esp` toolchain through [`rust-toolchain.toml`](rust-toolchain.toml) and pins ESP-IDF settings in [`.cargo/config.toml`](.cargo/config.toml).
 
-Install Rust, the ESP Rust toolchain and ESP flashing utilities according to your local ESP-Rust setup. The repository expects:
+The stable Rust toolchain is also required for formatting and native host tests.
 
-```text
-Rust toolchain: esp
-Target: xtensa-esp32s3-espidf
-ESP-IDF: v5.4.3
-```
-
-## EPUB dependency note
-
-v0.17.0 adds `miniz_oxide` for bounded raw-DEFLATE ZIP member extraction. The first local Cargo test or build refreshes `Cargo.lock` for this dependency. Commit the refreshed lockfile after local validation before publishing the repository.
-
-## Validate, test, build and flash
+## Validate
 
 ```bash
 ./scripts/validate.sh
-./scripts/test-host.sh
-source "$HOME/export-esp.sh"
-./scripts/build.sh
-./scripts/flash.sh /dev/cu.usbmodem2101
 ```
 
-`./scripts/validate.sh` performs format and repository-contract checks. `./scripts/test-host.sh` runs hardware-independent library tests on the stable host toolchain. `./scripts/build.sh` performs the ESP release build.
-
-## SD-card setup
-
-Copy and edit the example configuration files:
-
-```bash
-./scripts/install-sd-examples.sh /Volumes/YOUR_SD_CARD
-```
-
-The installer does not overwrite existing files unless `--force` is supplied.
-
-Required runtime paths:
+This runs:
 
 ```text
-/RUSTMIX/WIFI.TXT
-/RUSTMIX/WEATHER.TXT
-/RUSTMIX/ALARMS.TXT
-/RUSTMIX/DISPLAY.TXT
-/RUSTMIX/SLEEP/*.BMP
-/RUSTMIX/BOOKS/*.TXT
-/RUSTMIX/BOOKS/*.EPUB or *.EPU
-/RUSTMIX/READER/              # created automatically for Reader state, per-book positions and PREFS.TXT
+cargo +stable fmt --all -- --check
+./scripts/validate_source_contract.sh
+./scripts/test-host.sh
 ```
 
-See [`docs/SD_CARD_SETUP.md`](docs/SD_CARD_SETUP.md).
+Host tests explicitly use the detected native target so they do not inherit the repository default `xtensa-esp32s3-espidf` target.
 
-## Known issue: Weather provider reliability
+## Build
 
-The device-side retry and stale-cache behavior is implemented, but physical tests observed intermittent Open-Meteo `502`, TLS EOF and HTTP timeout failures. The Weather screen may remain unavailable until the provider path succeeds at least once during the active runtime session. See [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
+```bash
+./scripts/build.sh
+```
 
-## Documentation
+Equivalent embedded release build:
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- [`docs/READER_TXT_FOUNDATION.md`](docs/READER_TXT_FOUNDATION.md)
-- [`docs/READER_STATE_PERSISTENCE.md`](docs/READER_STATE_PERSISTENCE.md)
-- [`docs/BOARD_CONTRACT.md`](docs/BOARD_CONTRACT.md)
-- [`docs/SD_CARD_SETUP.md`](docs/SD_CARD_SETUP.md)
-- [`docs/PHYSICAL_SMOKE_TEST.md`](docs/PHYSICAL_SMOKE_TEST.md)
-- [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md)
-- [`docs/REFERENCE_AUDIT.md`](docs/REFERENCE_AUDIT.md)
-- [`docs/GITHUB_UPLOAD.md`](docs/GITHUB_UPLOAD.md)
-- [`docs/CLEANUP_REPORT.md`](docs/CLEANUP_REPORT.md)
-- [`docs/EPUB_XML_ATTRIBUTE_CONTRACT_REPAIR.md`](docs/EPUB_XML_ATTRIBUTE_CONTRACT_REPAIR.md)
+```bash
+cargo +esp build --release
+```
 
-## Packaging a clean source ZIP
+## Flash and monitor
+
+```bash
+./scripts/flash.sh
+```
+
+Pass an explicit serial port when needed:
+
+```bash
+./scripts/flash.sh /dev/cu.usbmodemXXXX
+```
+
+## Build an ELF-only firmware release
+
+```bash
+./scripts/build-release-firmware.sh
+```
+
+The script validates the source, builds the ESP-IDF release ELF, and creates an ELF-only release ZIP under `dist/`. Flash the supported ELF artifact with:
+
+```bash
+./scripts/flash-release.sh \
+  dist/waveshare-epd397-rust-app-v1.0.0.elf
+```
+
+Do not use `espflash write-bin`: it is a raw-address operation. A merged factory-image workflow remains deferred until bootloader, partition-table, and application offsets have been validated on physical hardware.
+
+See [`docs/RELEASE.md`](docs/RELEASE.md).
+
+## Package a cleaned source archive
 
 ```bash
 ./scripts/package-release.sh
 ```
 
-The generated archive is written under `dist/` and excludes build outputs, Git metadata and local caches.
+The output is written below `dist/` and excludes local build products, generated release artifacts, caches, temporary files, and extracted patch-overlay directories.
 
-## Licenses
+## SD-card setup
 
-Firmware source is MIT licensed. Generated embedded bitmap atlases are derived from Inter, Atkinson Hyperlegible, Atkinson Hyperlegible Next Medium and Literata Medium under the SIL Open Font License 1.1, plus DejaVu Serif under the Bitstream Vera / DejaVu notice. See [`docs/licenses/FONT_NOTICES.md`](docs/licenses/FONT_NOTICES.md).
+Install the bundled examples:
 
-### Reader FAT 8.3 runtime completion
+```bash
+./scripts/install-sd-examples.sh /Volumes/YOUR_SD_CARD
+```
 
-v0.16.7 keeps Reader-owned position writes on `POSITS.TXT` and TXT anchor caches on `<8HEX>.CCH`. The Reader validates the matching `.TMP` and `.BAK` siblings before writing. Bookmark rows show a page-number column while byte offsets remain the authoritative jump anchors.
+Install the complete X4 Dictionary pack:
 
-## v0.17.0 EPUB parser and documentation repair v2
+```bash
+./scripts/install-dictionary-x4-pack.sh \
+  --force \
+  --x4-repo /Users/piyushdaiya/Documents/projects/rustmix-x4-firmware \
+  /Volumes/YOUR_SD_CARD
+```
 
-Marker: `rustmix-wave=v0.17.0-parser-doc-repair-v2`
+Install the U.S.-only X4 Calendar pack:
 
-The EPUB `container.xml` rootfile lookup is delimiter-aware so `<rootfiles>` is not mistaken for the singular `<rootfile ...>` entry. See `docs/V0.17.0-PARSER-DOC-REPAIR-V2.md`.
+```bash
+./scripts/install-calendar-x4-pack.sh \
+  --force \
+  --x4-repo /Users/piyushdaiya/Documents/projects/rustmix-x4-firmware \
+  /Volumes/YOUR_SD_CARD
+```
 
+See [`docs/SD_CARD_SETUP.md`](docs/SD_CARD_SETUP.md) for the complete storage contract.
 
-## v0.17.0 EPUB XML attribute contract repair
+## Input conventions
 
-Marker: `rustmix-wave=epub-xml-attribute-tokenizer-repair-ready`
+```text
+ROTARY               Move the current selection
+SELECT               Activate the current selection
+BOOT short           Contextual action; keyboard/grid screens toggle NAV H / NAV V
+BOOT long             Hierarchical Back
+Power short          Open display-maintenance menu
+Power long           Enter sleep-image mode
+```
 
-The bounded EPUB parser now skips the opening XML element name before scanning quoted attributes. This repairs valid `container.xml` rootfile extraction, keeps singular `<rootfile>` matching distinct from the plural `<rootfiles>` wrapper, restores the validator-required v0.16.4–v0.16.8 physical smoke-test records, removes patch backup residue, and prevents backup artifacts from entering release ZIPs. See `docs/EPUB_XML_ATTRIBUTE_CONTRACT_REPAIR.md`.
+All new keyboard or grid-style text-entry screens should compose the shared `KeyboardGridNavigation` helper so BOOT-short H/V axis switching is consistent across apps.
 
-## v0.17.0 EPUB parser stack isolation repair
+## Durable documentation
 
-Marker: `rustmix-wave=reader-epub-parser-stack-isolation-ready`
+- [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md): screenshot-driven screen reference and UI navigation
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): module boundaries and runtime ownership
+- [`docs/BOARD_CONTRACT.md`](docs/BOARD_CONTRACT.md): board-level pin and hardware contract
+- [`docs/SD_CARD_SETUP.md`](docs/SD_CARD_SETUP.md): removable-storage paths and installers
+- [`docs/PHYSICAL_SMOKE_TEST.md`](docs/PHYSICAL_SMOKE_TEST.md): consolidated hardware verification
+- [`docs/RELEASE.md`](docs/RELEASE.md): source and firmware release generation
+- [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md): intentionally deferred work
+- [`CHANGELOG.md`](CHANGELOG.md): compact milestone history
 
-Real EPUB archive parsing, DEFLATE expansion and XHTML flattening now run on a short-lived dedicated `epub-parser` worker with a 64 KB stack. The staged Reader flow remains synchronous from the UI perspective, while the accepted 16 KB firmware main-task stack is preserved. See `docs/EPUB_PARSER_STACK_ISOLATION_REPAIR.md`.
+## License
 
-### Reader e-ink font pack
-
-v0.17.2 preserves the existing `serif` and `atkinson-hyperlegible` persisted preference values, adds explicit `literata`, and keeps Inter as the shared UI-backed Reader option. Reader-only Atkinson Hyperlegible Next Medium and Literata Medium strikes are generated as printable-ASCII Rust arrays; raw font binaries are intentionally excluded from the repository. Font selection remains part of the existing layout cache fingerprint, so TXT pagination and EPUB chapter-relative pagination rebuild through the staged Reader path while bookmarks keep byte offsets as authoritative anchors. See `docs/READER_EINK_FONT_PACK.md`.
+MIT. Embedded Reader font notices remain under [`docs/licenses/`](docs/licenses/).

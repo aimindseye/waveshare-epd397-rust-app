@@ -1,6 +1,9 @@
 #[cfg(target_os = "espidf")]
 mod firmware {
-    use std::time::{Duration, Instant};
+    use std::{
+        ffi::CString,
+        time::{Duration, Instant},
+    };
 
     use anyhow::Result;
     use embedded_hal::delay::DelayNs;
@@ -15,7 +18,7 @@ mod firmware {
                     ClockSource, Config as I2sChannelConfig, DataBitWidth, MclkMultiple, SlotMode,
                     StdClkConfig, StdConfig, StdGpioConfig, StdSlotConfig,
                 },
-                I2sDriver, I2sTx,
+                I2sBiDir, I2sDriver,
             },
             peripherals::Peripherals,
             sd::{
@@ -35,9 +38,9 @@ mod firmware {
         app::{
             display::{DisplayPreferences, DISPLAY_CONFIG_PATH},
             render_current_screen, AppState, ScreenRoute, ALARM_POLL_SECONDS,
-            MOTION_LIVE_REFRESH_SECONDS, NETWORK_LIVE_REFRESH_SECONDS,
-            NETWORK_LOG_HEARTBEAT_SECONDS, PANEL_IDLE_SLEEP_SECONDS, PARTIAL_REFRESH_LIMIT,
-            SAMPLE_LIVE_REFRESH_SECONDS,
+            IMU_EVENT_SCREEN_REFRESH_SECONDS, MOTION_LIVE_REFRESH_SECONDS,
+            NETWORK_LIVE_REFRESH_SECONDS, NETWORK_LOG_HEARTBEAT_SECONDS, PANEL_IDLE_SLEEP_SECONDS,
+            SAMPLE_LIVE_REFRESH_SECONDS, VOICE_RECORD_SCREEN_REFRESH_SECONDS,
         },
         audio::{
             espidf::AudioRuntime, AudioSnapshot, AudioUiRequest, AUDIO_MCLK_HZ,
@@ -45,13 +48,27 @@ mod firmware {
         },
         board_services::{BoardServices, BoardSnapshot},
         build_info::{FIRMWARE_VERSION, PRODUCT_SLUG, UI_SHELL_MILESTONE},
-        buttons::{ButtonEvent, Buttons, LongPressBackButton, BOOT_BACK_LONG_PRESS_MS},
+        buttons::{
+            BootButtonEvent, ButtonEvent, Buttons, LongPressBackButton, BOOT_BACK_LONG_PRESS_MS,
+        },
+        calendar::{
+            create_personal_event, delete_personal_event, update_personal_event, CalendarUiRequest,
+            CALENDAR_EVENTS_FILE, CALENDAR_ROOT, CALENDAR_US_EVENTS_FILE,
+        },
+        dictionary::{DICTIONARY_ROOT, DICTIONARY_SHARD_MAX_BYTES},
         epaper::Epaper397,
         framebuffer::FrameBuffer,
+        games::dirty_regions::MAX_DIRTY_REGIONS,
+        imu_events::IMU_EVENT_SAMPLE_INTERVAL_MS,
+        lua_runtime::{catalog::LUA_APPS_DIRECTORY, loader::LUA_LOADER_WORKER_STACK_BYTES},
         network::{
             espidf::NetworkRuntime, NetworkLogFingerprint, NetworkSnapshot, WifiConnectionState,
         },
         network_config::{NetworkConfig, WIFI_CONFIG_PATH},
+        panel_refresh::{
+            PanelGlobalReason, PanelRefreshCoordinator, PanelRefreshPlan, PanelRefreshRequest,
+            PANEL_PARTIAL_REFRESH_LIMIT,
+        },
         power::Axp2101,
         power_key::{
             PowerKeyEvent, SleepWakeGuard, SleepWakeGuardDecision, POWER_KEY_POLL_MS,
@@ -61,6 +78,7 @@ mod firmware {
         regional::RegionalPreferences,
         rtc::RtcDateTime,
         rtc_alarm_interrupt::{espidf::RtcAlarmInterruptMonitor, RTC_ALARM_INTERRUPT_GPIO},
+        runtime_memory::log_runtime_memory,
         shared_i2c::SharedI2cBus,
         sleep_images::{SleepImageCatalog, SleepImageSelection, SLEEP_IMAGE_DIRECTORY},
         sleep_mode::{SleepModeState, SleepWakeCause},
@@ -69,11 +87,24 @@ mod firmware {
             StorageBrowser, StorageSnapshot, StorageUiOutcome, SDMMC_COMMAND_TIMEOUT_MS,
             SDMMC_STABLE_SPEED_KHZ, SD_MOUNT_POINT, STORAGE_IO_RETRY_ATTEMPTS,
         },
+        voice_note_metadata::{
+            load_voice_notes_preferences, save_voice_notes_preferences, VoiceNotesPreferences,
+            VOICE_UNKNOWN_RECORDED_AT,
+        },
+        voice_notes::{
+            cleanup_stale_voice_tmp, delete_voice_note, save_voice_note_title, VoiceNotesUiRequest,
+            VoicePlaybackSession, VoiceRecordingSession, VOICE_NOTES_ROOT,
+            VOICE_PCM_MONO_CHUNK_BYTES, VOICE_PCM_STEREO_CAPTURE_BYTES,
+        },
         weather::{
-            espidf::fetch_open_meteo, WeatherFetchError, WeatherSnapshot,
+            espidf::fetch_open_meteo_on_worker, WeatherFetchError, WeatherSnapshot,
             WEATHER_RETRY_DELAYS_SECONDS, WEATHER_RETRY_LIMIT,
         },
         weather_config::{WeatherConfig, WEATHER_CONFIG_PATH},
+        wifi_transfer::{
+            espidf::WifiTransferServer, WifiTransferSnapshot, WifiTransferUiRequest,
+            WIFI_TRANSFER_INACTIVITY_SECONDS, WIFI_TRANSFER_ROOT, WIFI_TRANSFER_SERVER_STACK_BYTES,
+        },
     };
 
     pub fn run() -> Result<()> {
@@ -212,10 +243,10 @@ mod firmware {
         let panel_power = Axp2101::new(shared_i2c.clone());
         let mut board_services = BoardServices::new(shared_i2c.clone());
 
-        // Playback-only ES8311 milestone. The uploaded BSP uses I2S0 with
-        // MCLK GPIO13, BCLK GPIO14, WS GPIO47, ESP-to-codec DOUT GPIO48 and
-        // amplifier GPIO39. Codec-to-ESP DIN GPIO21 stays deferred with I2S RX.
-        // Start muted with the amplifier disabled; audio failure remains non-fatal.
+        // Bidirectional ES8311 Voice Notes milestone. The uploaded BSP uses I2S0 with
+        // MCLK GPIO13, BCLK GPIO14, WS GPIO47, ESP-to-codec DOUT GPIO48,
+        // codec-to-ESP DIN GPIO21 and amplifier GPIO39. Start muted with the
+        // amplifier disabled; audio failure remains non-fatal.
         info!("rustmix-wave=audio-init status=starting codec=es8311 address=0x18 wire-write=0x30");
         let audio_attempt = (|| -> Result<_> {
             let i2s_config = StdConfig::new(
@@ -228,17 +259,19 @@ mod firmware {
                 StdSlotConfig::philips_slot_default(DataBitWidth::Bits16, SlotMode::Stereo),
                 StdGpioConfig::default(),
             );
-            let mut tx = I2sDriver::<I2sTx>::new_std_tx(
+            let mut i2s = I2sDriver::<I2sBiDir>::new_std_bidir(
                 peripherals.i2s0,
                 &i2s_config,
                 peripherals.pins.gpio14,
+                peripherals.pins.gpio21,
                 peripherals.pins.gpio48,
                 Some(peripherals.pins.gpio13),
                 peripherals.pins.gpio47,
             )?;
-            tx.tx_enable()?;
+            i2s.tx_enable()?;
+            i2s.rx_enable()?;
             let amplifier = PinDriver::output(peripherals.pins.gpio39)?;
-            AudioRuntime::initialize(shared_i2c.clone(), tx, amplifier, &mut FreeRtosDelay)
+            AudioRuntime::initialize(shared_i2c.clone(), i2s, amplifier, &mut FreeRtosDelay)
         })();
         let (mut audio_runtime, initial_audio_snapshot) = match audio_attempt {
             Ok(runtime) => {
@@ -257,7 +290,7 @@ mod firmware {
                     profile.adc17,
                     profile.gp45
                 );
-                info!("rustmix-wave=audio-i2s status=ready direction=tx-only sample-rate={AUDIO_SAMPLE_RATE_HZ} bits=16 channels=2 mclk-gpio=13 bclk-gpio=14 ws-gpio=47 dout-gpio=48 deferred-rx-din-gpio=21");
+                info!("rustmix-wave=audio-i2s status=ready direction=bidir sample-rate={AUDIO_SAMPLE_RATE_HZ} bits=16 tx-channels=2 rx-channels=2 voice-wav-channels=1 mclk-gpio=13 bclk-gpio=14 ws-gpio=47 dout-gpio=48 din-gpio=21");
                 info!("rustmix-wave=audio-amp status=ready gpio=39 default=off");
                 info!("rustmix-wave=audio-subsystem-ready mute=true volume={DEFAULT_AUDIO_VOLUME_PERCENT}");
                 (Some(runtime), snapshot)
@@ -294,7 +327,7 @@ mod firmware {
         let mut back_button =
             LongPressBackButton::new(PinDriver::input(peripherals.pins.gpio0, Pull::Up)?);
         info!(
-            "rustmix-wave=boot-button-back status=ready gpio=0 active-low=true hold-ms={BOOT_BACK_LONG_PRESS_MS}"
+            "rustmix-wave=boot-button-back status=ready gpio=0 active-low=true short-press=contextual-navigation hold-ms={BOOT_BACK_LONG_PRESS_MS}"
         );
         // The uploaded BSP routes the PCF85063 active-low alarm output to
         // GPIO45. Validate that board-level line before introducing MCU
@@ -307,10 +340,44 @@ mod firmware {
         let mut button_delay = FreeRtosDelay;
         let mut service_delay = FreeRtosDelay;
         let mut frame = FrameBuffer::new_white();
-        let mut state = AppState::default();
+        // Keep the growing product UI state off the firmware main-task stack.
+        // HTTPS weather retrieval and display refreshes still execute from the
+        // same orchestrator, but their stack budget is no longer reduced by a
+        // long-lived inline AppState allocation.
+        let mut state = Box::new(AppState::default());
+        let mut panel_refresh = PanelRefreshCoordinator::default();
+        sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
         state.display = display_preferences;
         let reader_persistence = state.reader.load_persistent_state();
         state.reader.refresh_library();
+        if _mounted_sd.is_some() {
+            match cleanup_stale_voice_tmp(std::path::Path::new(VOICE_NOTES_ROOT)) {
+                Ok(removed) => info!(
+                    "rustmix-wave=voice-note-stale-tmp-cleanup status=completed removed={removed} root={VOICE_NOTES_ROOT}"
+                ),
+                Err(error) => warn!(
+                    "rustmix-wave=voice-note-stale-tmp-cleanup status=failed root={VOICE_NOTES_ROOT} error={error:#}"
+                ),
+            }
+        }
+        if _mounted_sd.is_some() {
+            match load_voice_notes_preferences(std::path::Path::new(VOICE_NOTES_ROOT)) {
+                Ok(preferences) => {
+                    state.voice_notes.mic_gain = preferences.mic_gain;
+                    info!(
+                        "rustmix-wave=voice-note-settings-load status=completed mic-gain={} path={VOICE_NOTES_ROOT}/SETTINGS.TXT",
+                        preferences.mic_gain.marker()
+                    );
+                }
+                Err(error) => warn!(
+                    "rustmix-wave=voice-note-settings-load status=failed path={VOICE_NOTES_ROOT}/SETTINGS.TXT error={error:#}"
+                ),
+            }
+        }
+        refresh_voice_note_storage_available(&mut state, _mounted_sd.is_some());
+        state.refresh_voice_notes_catalog();
+        state.refresh_lua_app_catalog(_mounted_sd.is_some());
+        log_lua_runtime_events(&mut state);
         info!(
             "rustmix-wave=reader-persistence-load state-loaded={} preferences-loaded={} positions={} recent={} bookmarks={} warning={}",
             reader_persistence.state_loaded,
@@ -360,9 +427,9 @@ mod firmware {
             init.imu_revision
                 .map_or_else(|| "unavailable".into(), |value| format!("0x{value:02X}"))
         );
-        let mut power_key_available = match board_services.initialize_power_key_short_press() {
+        let mut power_key_available = match board_services.initialize_power_key_events() {
             Ok(()) => {
-                info!("rustmix-wave=power-key status=ready source=axp2101-pek poll-ms={POWER_KEY_POLL_MS}");
+                info!("rustmix-wave=power-key status=ready source=axp2101-pek events=short-menu,long-sleep poll-ms={POWER_KEY_POLL_MS}");
                 true
             }
             Err(error) => {
@@ -384,6 +451,11 @@ mod firmware {
         panel.initialize()?;
         render_current_screen(&mut frame, &state)?;
         panel.show_base(frame.as_bytes())?;
+        panel_refresh.reset_after_external_global(PanelGlobalReason::InitialBoot);
+        sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
+        info!(
+            "rustmix-wave=panel-refresh plan=global-base reason=initial-boot transport=global-base"
+        );
         info!("rustmix-wave=epd397-rust-display-ready");
 
         // Start optional networking only after the first e-paper frame is
@@ -417,6 +489,13 @@ mod firmware {
         log_network_snapshot(&state.network);
         let mut last_network_log = Instant::now();
         let mut last_network_fingerprint = state.network.log_fingerprint();
+        // Explicitly activated only.  Normal boot never starts the portal.
+        let mut wifi_transfer_server: Option<WifiTransferServer> = None;
+        state.update_wifi_transfer_snapshot(WifiTransferSnapshot::default());
+        let mut voice_recording: Option<VoiceRecordingSession> = None;
+        let mut voice_playback: Option<VoicePlaybackSession> = None;
+        let mut voice_stereo_buffer = vec![0_u8; VOICE_PCM_STEREO_CAPTURE_BYTES];
+        let mut voice_mono_buffer = vec![0_u8; VOICE_PCM_MONO_CHUNK_BYTES];
         info!("rustmix-wave=open-meteo-weather-forecast-ready");
         info!("rustmix-wave=open-meteo-fixed-point-json-parser-ready");
         info!("rustmix-wave=open-meteo-whitespace-parser-repair-ready");
@@ -430,18 +509,21 @@ mod firmware {
         );
         info!("rustmix-wave=rtc-alarm-int-readiness-ready gpio={RTC_ALARM_INTERRUPT_GPIO} active-low=true");
         info!("rustmix-wave=power-key-sleep-image-mode-ready path={SLEEP_IMAGE_DIRECTORY} format=native-800x480-1bpp-bmp mcu-sleep=false");
+        info!("rustmix-wave=power-key-short-menu-long-sleep-ready short-press=display-maintenance-menu long-press=sleep-image wake=power-key menu-action=manual-global-refresh");
+        info!("rustmix-wave=release-flash-workflow-safety-ready docs=consolidated workflow=ci release-artifact=elf supported-flash=espflash-flash factory-image=deferred");
+        info!("rustmix-wave=text-editor-layout-alignment-ready voice-title-editor=shared-grid-keyboard calendar-editor-status=compact-date keyboard=boot-hv-axis footer=width-safe");
         info!("rustmix-wave=sleep-image-directory-classification-fix-ready policy=fat-metadata-fallback");
         info!("rustmix-wave=network-suspended-sleep-image-mode-ready wifi=stop-on-sleep sntp=paused weather=paused mcu-sleep=false");
         info!("rustmix-wave=random-sleep-image-selection-ready source=esp-random policy=avoid-immediate-repeat-when-multiple");
         info!("rustmix-wave=main-category-navigation-ready categories=5");
         info!("rustmix-wave=reader-category-ready entries=3");
         info!("rustmix-wave=productivity-category-ready entries=2");
-        info!("rustmix-wave=games-category-ready entries=1 status=tbd");
+        info!("rustmix-wave=games-category-ready entries=1 status=sd-lua-catalog");
         info!("rustmix-wave=tools-category-ready entries=3");
         info!("rustmix-wave=settings-category-ready entries=9 display=true");
         info!("rustmix-wave=display-settings-ready default-family=inter alternate-family=atkinson-hyperlegible default-size=standard profiles=compact,standard,large persistence={DISPLAY_CONFIG_PATH} scope=all-user-facing-screens");
         info!("rustmix-wave=global-ui-typography-ready default-family=inter alternate-family=atkinson-hyperlegible default-size=standard profiles=compact,standard,large persistence={DISPLAY_CONFIG_PATH} scope=all-user-facing-screens");
-        info!("rustmix-wave=boot-button-hierarchical-back-ready gpio=0 active-low=true hold-ms={BOOT_BACK_LONG_PRESS_MS} policy=long-press");
+        info!("rustmix-wave=boot-button-hierarchical-back-ready gpio=0 active-low=true short-press=contextual-navigation hold-ms={BOOT_BACK_LONG_PRESS_MS} policy=long-press-back");
         info!("rustmix-wave=category-back-row-removal-ready policy=boot-long-press");
         info!("rustmix-wave=global-typography-scale-increase-ready shift=two-raster-steps settings-page-size=6 display-copy=compact default-family=inter default-size=standard");
         info!("rustmix-wave=secondary-screen-readability-reflow-ready detail-role=technical-tokens-only pagination=device-info-3-pages details=weather,audio,rtc,environment,motion,network synthetic-back-rows=removed");
@@ -451,7 +533,9 @@ mod firmware {
         info!(
             "rustmix-wave=calendar-local-date-ready timezone=regional-profile source=rtc-localized"
         );
-        info!("rustmix-wave=calendar-navigation-ready modes=day,month select=toggle-mode back=boot-long-press");
+        info!("rustmix-wave=calendar-navigation-ready modes=day,month select=toggle-mode boot-short=agenda back=boot-long-press");
+        info!("rustmix-wave=calendar-us-events-daily-agenda-ready root={CALENDAR_ROOT} personal={CALENDAR_EVENTS_FILE} us={CALENDAR_US_EVENTS_FILE} hindu=excluded markers=month-grid agenda=scrollable details=personal-editor missing-files=safe alarms=separate");
+        info!("rustmix-wave=calendar-personal-event-editor-ready writable=EVENTS.TXT temp=EVENTS.TMP backup=EVENTS.BAK operations=create,edit,delete us-holidays=read-only keyboard=boot-hv-axis alarms=separate");
         info!("rustmix-wave=power-key-sleep-entry-wake-guard-ready source=axp2101-pek minimum-quiet-ms={POWER_KEY_WAKE_GUARD_QUIET_MS} policy=suppress-stale-until-quiet-window");
         info!("rustmix-wave=unit-converter-foundation-ready categories=length,mass,temperature,volume mode=offline fixed-point=true precision=thousandths");
         info!("rustmix-wave=unit-converter-navigation-ready fields=category,from-unit,value,to-unit,step-size back=boot-long-press");
@@ -479,7 +563,39 @@ mod firmware {
         info!("rustmix-wave=reader-epub-chapter-aware-presentation-ready page-label=chapter,page-of-total bookmarks=chapter,page-of-total library-title=opf-metadata fallback=fat-filename txt-path=preserved");
         info!("rustmix-wave=reader-epub-watchdog-memory-pressure-repair-ready index-yield-every-pages=4 index-yield-ms=1 session-release=before-book-open layout-rebuild=move-document toc-jump=no-document-clone parser-worker-stack-bytes=65536 title-worker-stack-bytes=32768");
         info!("rustmix-wave=reader-eink-font-pack-ready fonts=inter,atkinson-hyperlegible,serif,literata atkinson-source=atkinson-hyperlegible-next-medium literata-source=literata-medium glyphs=printable-ascii persisted-keys=serif,atkinson-hyperlegible cache-fingerprint=book-font epub-repagination=layout-rebuild bookmarks=byte-offset txt-epub-aligned=true");
+        info!("rustmix-wave=lua-runtime-foundation-ready mode=bootstrap-static,event-bridge root={LUA_APPS_DIRECTORY} manifest=APP.TOM entry=MAIN.LUA script-max-bytes=65536 vm-callbacks=sudoku,minesweeper,tilt-maze,motion-2048,sokoban-tilt-bounded-native");
+        info!("rustmix-wave=lua-native-dirty-region-canvas-ready commands=256 text-bytes=160 dirty-regions={MAX_DIRTY_REGIONS} partial-limit={PANEL_PARTIAL_REFRESH_LIMIT} transport=existing-fullscreen-partial panel-api=rust-owned");
+        info!("rustmix-wave=panel-refresh-coordinator-ready partial-limit={PANEL_PARTIAL_REFRESH_LIMIT} transport=existing-fullscreen-partial state=main-loop-owned lua-route-global-refresh=false");
+        info!("rustmix-wave=runtime-worker-boundary-ready workers=weather-fetch,lua-loader policy=short-lived-named-stack panel-spi=main-task-only");
+        info!("rustmix-wave=lua-loader-stack-isolation-ready worker=lua-loader stack-bytes={LUA_LOADER_WORKER_STACK_BYTES} main-task-stack-bytes=16384 policy=short-lived-worker-join");
+        info!("rustmix-wave=lua-sudoku-event-bridge-ready sample=SUDOKU input=up,down,select,boot-short-context board=native dirty=old-cell,new-cell,status refresh=shared-panel-coordinator transport=existing-fullscreen-partial panel-api=rust-owned");
+        info!("rustmix-wave=lua-sudoku-boot-axis-navigation-ready short-press=boot nav=axis-toggle edit=cancel default-axis=horizontal long-press=hierarchical-back dirty=status-or-cell refresh=shared-panel-coordinator");
+        info!("rustmix-wave=lua-sudoku-boot-mode-ux-repair-ready nav=boot-short-axis-toggle edit=boot-short-cancel long-press=hierarchical-back dirty=axis-status-or-edit-cell-status refresh=shared-panel-coordinator");
+        info!("rustmix-wave=lua-minesweeper-event-bridge-ready sample=MINES board=beginner-9x9 mines=10 first-reveal=safe input=up,down,select,boot-short-context action=reveal,flag dirty=old-cell,new-cell,status-or-board refresh=shared-panel-coordinator transport=existing-fullscreen-partial panel-api=rust-owned");
+        info!("rustmix-wave=imu-event-bridge-ready events=tilt,shake,rotate,level sampling=motion-events-or-motion-game sample-ms={IMU_EVENT_SAMPLE_INTERVAL_MS} diagnostics=thresholds,debounce,counters redraw=event-or-{IMU_EVENT_SCREEN_REFRESH_SECONDS}s-heartbeat raw-i2c=rust-owned lua-api=none");
+        info!("rustmix-wave=imu-event-thresholds tilt-mg={} shake-delta-mg={} rotate-dps={} level-tolerance-mg={} debounce-ms={}", state.imu_events.thresholds.tilt_enter_mg, state.imu_events.thresholds.shake_delta_mg, state.imu_events.thresholds.rotate_dps, state.imu_events.thresholds.level_tolerance_mg, state.imu_events.thresholds.debounce_ms);
+        info!("rustmix-wave=imu-event-discrete-latching-ready tilt=release-to-neutral rotate=release-to-neutral level=edge-only shake=cooldown raw-i2c=rust-owned");
+        info!("rustmix-wave=lua-tilt-maze-event-bridge-ready sample=TILTMAZE board=9x9 motion=debounced-tilt-only dirty=old-cell,new-cell,status-or-board refresh=shared-panel-coordinator transport=existing-fullscreen-partial panel-api=rust-owned");
+        info!("rustmix-wave=lua-tilt-maze-portrait-axis-repair-ready logical=portrait mapping=raw:+x->down,-x->up,+y->left,-y->right diagnostics=logical-direction,raw-axis");
+        info!("rustmix-wave=lua-motion-2048-event-bridge-ready sample=M2048 board=4x4 motion=debounced-tilt-swipe dirty=board,status refresh=shared-panel-coordinator transport=existing-fullscreen-partial panel-api=rust-owned");
+        info!("rustmix-wave=lua-sokoban-tilt-event-bridge-ready sample=SOKOBAN board=9x9 motion=debounced-tilt-only dirty=old-cell,new-cell,status-or-board refresh=shared-panel-coordinator transport=existing-fullscreen-partial panel-api=rust-owned");
+        info!("rustmix-wave=weather-fetch-stack-isolation-ready worker=weather-fetch stack-bytes=65536 main-task-stack-bytes=16384 response-max-bytes=8192 state=heap-boxed policy=short-lived-worker-join");
+        info!("rustmix-wave=wifi-transfer-web-portal-ready activation=settings-network-explicit-toggle auto-start=false root={WIFI_TRANSFER_ROOT} transport=http-lan-only token=required server-stack-bytes={WIFI_TRANSFER_SERVER_STACK_BYTES} main-task-stack-bytes=16384 upload=streamed-atomic-tmp fat83=true protected-config=true inactivity-seconds={WIFI_TRANSFER_INACTIVITY_SECONDS}");
+        log_runtime_memory("boot-complete");
         info!("rustmix-wave=hierarchical-router-ready policy=category-subcategory-feature-details");
+        info!("rustmix-wave=wifi-transfer-lifecycle-ready state=off-until-settings-network-toggle server=temporary-http-task sd-root=/sdcard/RUSTMIX stop=switch-off,back,sleep,wifi-loss,inactivity");
+        info!("rustmix-wave=wifi-transfer-immediate-start-redraw-repair-ready dispatch=ordinary-button-event-before-refresh snapshot=ready-url-code refresh=single-normal-partial");
+        info!("rustmix-wave=voice-notes-foundation-ready root={VOICE_NOTES_ROOT} format=wav-pcm16-mono-16khz storage=streamed-tmp-rename capture=cooperative-bounded-i2s-rx chunk-bytes={VOICE_PCM_MONO_CHUNK_BYTES} main-task-stack-bytes=16384 audio-owner=native");
+        info!("rustmix-wave=voice-notes-microphone-gain-ready profiles=low,normal,high,boost default=high multipliers=1x,2x,3x,4x clipping=per-recording-saturated-sample-count wav-format=unchanged");
+        info!("rustmix-wave=voice-notes-fat-metadata-catalog-repair-ready policy=stat-metadata-final-classification overwrite=refuse-existing-target");
+        info!("rustmix-wave=voice-notes-catalog-scrolling-saved-wav-playback-ready visible-rows=6 format=wav-pcm16-mono-16khz playback=bounded-sd-stream mono-to-stereo=true volume=existing-codec-setting audio-owner=native stale-tmp-cleanup=boot alarms=interrupt");
+        info!("rustmix-wave=voice-notes-organizer-controls-export-ready gain-persistence=SETTINGS.TXT metadata=META.TXT titles=friendly-sidecar filenames=fat83-wav recording-date-time=rtc-local storage=esp-vfs-fat-info delete-confirmation=true pause-resume=rx-discard export=wifi-transfer-shortcut");
+        info!("rustmix-wave=offline-dictionary-x4-pack-native-foundation-ready root={DICTIONARY_ROOT} index=INDEX.TXT shards=DATA/*.JSN shard-max-bytes={DICTIONARY_SHARD_MAX_BYTES} lookup=exact-prefix-fallback wildcard=true ui=native-rust");
+        info!("rustmix-wave=dictionary-keyboard-boot-axis-navigation-ready short-press=boot toggle=horizontal,vertical default-axis=horizontal selected-key=preserved long-press=hierarchical-back helper=keyboard-grid-navigation");
+        info!(
+            "rustmix-wave=voice-notes-catalog status=completed notes={} root={VOICE_NOTES_ROOT}",
+            state.voice_notes.notes.len()
+        );
 
         let mut last_activity = Instant::now();
         let mut last_status_refresh = Instant::now();
@@ -487,8 +603,18 @@ mod firmware {
         let mut last_power_key_poll = Instant::now();
         let mut last_weather_attempt: Option<Instant> = None;
         let mut last_reader_tick = Instant::now();
+        let imu_event_started_at = Instant::now();
+        let mut last_imu_event_sample = Instant::now();
+        let mut last_imu_event_screen_refresh = Instant::now();
         let mut weather_retry = WeatherRetryState::default();
+        let mut last_voice_record_refresh = Instant::now();
         loop {
+            maintain_wifi_transfer_server(
+                &mut wifi_transfer_server,
+                &mut state,
+                &mut storage_browser,
+                _mounted_sd.is_some(),
+            );
             if state.panel_awake
                 && last_activity.elapsed() >= Duration::from_secs(PANEL_IDLE_SLEEP_SECONDS)
             {
@@ -497,36 +623,199 @@ mod firmware {
                 info!("rustmix-wave=epd397-panel-sleep");
             }
 
-            if let Some(runtime) = audio_runtime.as_mut() {
-                match runtime.tick() {
-                    Ok(changed) => {
-                        let latest = runtime.snapshot();
-                        if latest != state.audio {
-                            state.update_audio_snapshot(latest);
-                            log_audio_snapshot(&state.audio);
-                            if changed
-                                && state.panel_awake
-                                && matches!(
-                                    state.active_route(),
-                                    ScreenRoute::Audio
-                                        | ScreenRoute::AudioDetails
-                                        | ScreenRoute::Alarms
-                                )
+            let mut voice_capture_failure = None;
+            if let Some(session) = voice_recording.as_mut() {
+                if state.voice_notes.recording_paused {
+                    let discard = audio_runtime
+                        .as_mut()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "audio runtime unavailable during paused voice recording"
+                            )
+                        })
+                        .and_then(|runtime| runtime.discard_voice_pcm(&mut voice_stereo_buffer));
+                    if let Err(error) = discard {
+                        voice_capture_failure = Some(format!("{error:#}"));
+                    }
+                } else {
+                    let capture = audio_runtime
+                        .as_mut()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("audio runtime unavailable during voice recording")
+                        })
+                        .and_then(|runtime| {
+                            runtime.read_voice_pcm_mono(
+                                &mut voice_stereo_buffer,
+                                &mut voice_mono_buffer,
+                                state.voice_notes.mic_gain,
+                            )
+                        });
+                    match capture {
+                        Ok(metrics) if metrics.bytes > 0 => {
+                            session.add_clipped_samples(metrics.clipped_samples);
+                            if let Err(error) =
+                                session.append_pcm16_mono(&voice_mono_buffer[..metrics.bytes])
                             {
-                                refresh_screen(
-                                    &mut panel,
-                                    &mut frame,
-                                    &mut state,
-                                    RefreshRequest::Normal,
-                                )?;
+                                voice_capture_failure = Some(format!("{error:#}"));
+                            } else {
+                                state.voice_notes.update_recording_progress(
+                                    session.pcm_bytes(),
+                                    session.peak(),
+                                    session.clipped_samples(),
+                                );
                             }
                         }
+                        Ok(_) => {}
+                        Err(error) => voice_capture_failure = Some(format!("{error:#}")),
                     }
-                    Err(error) => {
-                        warn!("rustmix-wave=audio-event outcome=playback-error error={error:#}");
-                        runtime.record_failure(format!("{error:#}"));
-                        state.update_audio_snapshot(runtime.snapshot());
-                        log_audio_snapshot(&state.audio);
+                }
+                if voice_capture_failure.is_none()
+                    && state.panel_awake
+                    && state.active_route() == ScreenRoute::VoiceNoteRecording
+                    && last_voice_record_refresh.elapsed()
+                        >= Duration::from_secs(VOICE_RECORD_SCREEN_REFRESH_SECONDS)
+                {
+                    if state.voice_notes.recording_paused {
+                        info!("rustmix-wave=voice-record status=paused file={} elapsed-seconds={} pcm-bytes={} peak={} clipped-samples={} mic-gain={}", session.file_name(), state.voice_notes.elapsed_seconds, session.pcm_bytes(), session.peak(), session.clipped_samples(), state.voice_notes.mic_gain.marker());
+                    } else {
+                        info!("rustmix-wave=voice-record status=active file={} elapsed-seconds={} pcm-bytes={} peak={} clipped-samples={} mic-gain={}", session.file_name(), state.voice_notes.elapsed_seconds, session.pcm_bytes(), session.peak(), session.clipped_samples(), state.voice_notes.mic_gain.marker());
+                    }
+                    refresh_screen(
+                        &mut panel,
+                        &mut frame,
+                        &mut state,
+                        &mut panel_refresh,
+                        RefreshRequest::Normal,
+                    )?;
+                    last_voice_record_refresh = Instant::now();
+                }
+            }
+            if let Some(error) = voice_capture_failure {
+                warn!("rustmix-wave=voice-record status=failed stage=capture error={error}");
+                if let Some(active) = voice_recording.take() {
+                    let _ = active.cancel();
+                }
+                if let Some(runtime) = audio_runtime.as_mut() {
+                    let _ = runtime.finish_voice_recording();
+                    state.update_audio_snapshot(runtime.snapshot());
+                }
+                state.voice_notes.fail(error);
+                log_runtime_memory("after-voice-record-stop");
+            }
+
+            let mut voice_playback_finished = None;
+            let mut voice_playback_failure = None;
+            if voice_recording.is_none() {
+                if let Some(session) = voice_playback.as_mut() {
+                    match session.read_pcm16_mono(&mut voice_mono_buffer) {
+                        Ok(0) => voice_playback_finished = Some(session.file_name().to_string()),
+                        Ok(bytes) => {
+                            let output = audio_runtime
+                                .as_mut()
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "audio runtime unavailable during voice-note playback"
+                                    )
+                                })
+                                .and_then(|runtime| {
+                                    runtime.write_voice_pcm16_mono(
+                                        &voice_mono_buffer[..bytes],
+                                        &mut voice_stereo_buffer,
+                                    )
+                                });
+                            match output {
+                                Ok(()) => {
+                                    state.voice_notes.update_playback_progress(
+                                        session.played_pcm_bytes(),
+                                        session.total_pcm_bytes(),
+                                    );
+                                    if session.is_complete() {
+                                        voice_playback_finished =
+                                            Some(session.file_name().to_string());
+                                    }
+                                }
+                                Err(error) => {
+                                    voice_playback_failure = Some(format!("{error:#}"));
+                                }
+                            }
+                        }
+                        Err(error) => voice_playback_failure = Some(format!("{error:#}")),
+                    }
+                }
+            }
+            if let Some(file_name) = voice_playback_finished {
+                stop_voice_note_playback(
+                    &mut voice_playback,
+                    &mut audio_runtime,
+                    &mut state,
+                    "completed",
+                );
+                info!("rustmix-wave=voice-note-playback status=completed file={file_name}");
+                if state.panel_awake && state.active_route() == ScreenRoute::VoiceNoteDetails {
+                    refresh_screen(
+                        &mut panel,
+                        &mut frame,
+                        &mut state,
+                        &mut panel_refresh,
+                        RefreshRequest::Normal,
+                    )?;
+                }
+            }
+            if let Some(error) = voice_playback_failure {
+                warn!("rustmix-wave=voice-note-playback status=failed error={error}");
+                stop_voice_note_playback(
+                    &mut voice_playback,
+                    &mut audio_runtime,
+                    &mut state,
+                    "stream-error",
+                );
+                state.voice_notes.fail(format!("Playback failed: {error}"));
+                if state.panel_awake && state.active_route() == ScreenRoute::VoiceNoteDetails {
+                    refresh_screen(
+                        &mut panel,
+                        &mut frame,
+                        &mut state,
+                        &mut panel_refresh,
+                        RefreshRequest::Normal,
+                    )?;
+                }
+            }
+
+            if voice_recording.is_none() && voice_playback.is_none() {
+                if let Some(runtime) = audio_runtime.as_mut() {
+                    match runtime.tick() {
+                        Ok(changed) => {
+                            let latest = runtime.snapshot();
+                            if latest != state.audio {
+                                state.update_audio_snapshot(latest);
+                                log_audio_snapshot(&state.audio);
+                                if changed
+                                    && state.panel_awake
+                                    && matches!(
+                                        state.active_route(),
+                                        ScreenRoute::Audio
+                                            | ScreenRoute::AudioDetails
+                                            | ScreenRoute::Alarms
+                                    )
+                                {
+                                    refresh_screen(
+                                        &mut panel,
+                                        &mut frame,
+                                        &mut state,
+                                        &mut panel_refresh,
+                                        RefreshRequest::Normal,
+                                    )?;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            warn!(
+                                "rustmix-wave=audio-event outcome=playback-error error={error:#}"
+                            );
+                            runtime.record_failure(format!("{error:#}"));
+                            state.update_audio_snapshot(runtime.snapshot());
+                            log_audio_snapshot(&state.audio);
+                        }
                     }
                 }
             }
@@ -601,6 +890,23 @@ mod firmware {
                         }
                         state.update_alarm_snapshot(alarm_engine.snapshot());
                         if outcome.triggered {
+                            if let Some(active) = voice_recording.take() {
+                                let _ = active.cancel();
+                                if let Some(runtime) = audio_runtime.as_mut() {
+                                    let _ = runtime.finish_voice_recording();
+                                    state.update_audio_snapshot(runtime.snapshot());
+                                }
+                                state.voice_notes.cancel_recording();
+                                info!("rustmix-wave=voice-record status=cancelled reason=alarm-trigger");
+                            }
+                            if voice_playback.is_some() {
+                                stop_voice_note_playback(
+                                    &mut voice_playback,
+                                    &mut audio_runtime,
+                                    &mut state,
+                                    "alarm-trigger",
+                                );
+                            }
                             info!(
                                 "rustmix-wave=alarm-triggered active={} local={} hardware-flag={hardware_flag} interrupt-low={}",
                                 state.alarms.active.as_ref().map_or("alarm", |active| active.name.as_str()),
@@ -632,7 +938,9 @@ mod firmware {
                             if woke_from_sleep {
                                 panel.initialize()?;
                                 state.panel_awake = true;
-                                state.partial_refreshes = 0;
+                                panel_refresh
+                                    .reset_after_external_global(PanelGlobalReason::AfterWake);
+                                sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
                             }
                             state.router.navigate_to(ScreenRoute::Alarms);
                             info!("rustmix-wave=screen-route route=alarms cause=alarm-trigger");
@@ -645,6 +953,7 @@ mod firmware {
                                 &mut panel,
                                 &mut frame,
                                 &mut state,
+                                &mut panel_refresh,
                                 if woke_from_sleep {
                                     RefreshRequest::ForceGlobalAfterWake
                                 } else {
@@ -689,13 +998,16 @@ mod firmware {
                 && last_power_key_poll.elapsed() >= Duration::from_millis(POWER_KEY_POLL_MS)
             {
                 match board_services.take_power_key_event() {
-                    Ok(Some(PowerKeyEvent::ShortPress)) => {
-                        info!("rustmix-wave=power-key event=short-press source=axp2101-pek");
+                    Ok(Some(event)) => {
+                        info!(
+                            "rustmix-wave=power-key event={} source=axp2101-pek",
+                            event.marker()
+                        );
                         if sleep_mode.is_sleeping() {
                             let elapsed_ms = sleep_wake_guard_started_at
                                 .as_ref()
                                 .map_or(0, |started_at| started_at.elapsed().as_millis() as u64);
-                            if sleep_wake_guard.on_short_press(elapsed_ms)
+                            if sleep_wake_guard.on_power_press(elapsed_ms)
                                 == SleepWakeGuardDecision::SuppressStalePress
                             {
                                 info!(
@@ -709,10 +1021,12 @@ mod firmware {
                             let restore_route = sleep_mode.exit(SleepWakeCause::PowerKey);
                             panel.initialize()?;
                             state.panel_awake = true;
-                            state.partial_refreshes = 0;
                             state.router.navigate_to(restore_route);
                             render_current_screen(&mut frame, &state)?;
                             panel.show_base(frame.as_bytes())?;
+                            panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
+                            sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
+                            info!("rustmix-wave=panel-refresh plan=global-base reason=after-wake transport=global-base");
                             info!(
                                 "rustmix-wave=sleep-mode-exit cause=power-key restore-route={}",
                                 restore_route.marker()
@@ -732,11 +1046,58 @@ mod firmware {
                             }
                             last_activity = Instant::now();
                             last_status_refresh = Instant::now();
+                        } else if event == PowerKeyEvent::ShortPress {
+                            if state.alarms.active.is_some() {
+                                warn!(
+                                    "rustmix-wave=power-key-menu outcome=rejected reason=active-alarm"
+                                );
+                            } else {
+                                state.open_power_key_menu();
+                                refresh_screen(
+                                    &mut panel,
+                                    &mut frame,
+                                    &mut state,
+                                    &mut panel_refresh,
+                                    RefreshRequest::Normal,
+                                )?;
+                                info!(
+                                    "rustmix-wave=power-key-menu outcome=opened return-route={}",
+                                    state.power_key_sleep_restore_route().marker()
+                                );
+                                last_activity = Instant::now();
+                                last_status_refresh = Instant::now();
+                            }
                         } else if state.alarms.active.is_some() {
                             warn!(
                                 "rustmix-wave=sleep-mode-enter status=rejected reason=active-alarm"
                             );
                         } else {
+                            stop_wifi_transfer_server(
+                                &mut wifi_transfer_server,
+                                &mut state,
+                                &mut storage_browser,
+                                _mounted_sd.is_some(),
+                                "sleep-entry",
+                            );
+                            if let Some(active) = voice_recording.take() {
+                                let _ = active.cancel();
+                                if let Some(runtime) = audio_runtime.as_mut() {
+                                    let _ = runtime.finish_voice_recording();
+                                    state.update_audio_snapshot(runtime.snapshot());
+                                }
+                                state.voice_notes.cancel_recording();
+                                info!(
+                                    "rustmix-wave=voice-record status=cancelled reason=sleep-entry"
+                                );
+                            }
+                            if voice_playback.is_some() {
+                                stop_voice_note_playback(
+                                    &mut voice_playback,
+                                    &mut audio_runtime,
+                                    &mut state,
+                                    "sleep-entry",
+                                );
+                            }
                             if let Some(runtime) = audio_runtime.as_mut() {
                                 match runtime.stop_playback() {
                                     Ok(()) => info!("rustmix-wave=audio-event outcome=playback-stop reason=sleep-mode"),
@@ -766,9 +1127,13 @@ mod firmware {
                                 panel.initialize()?;
                                 state.panel_awake = true;
                             }
-                            let restore_route = state.active_route();
+                            let restore_route = state.power_key_sleep_restore_route();
                             frame = selection.frame;
                             panel.show_base(frame.as_bytes())?;
+                            panel_refresh
+                                .reset_after_external_global(PanelGlobalReason::SleepImage);
+                            sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
+                            info!("rustmix-wave=panel-refresh plan=global-base reason=sleep-image transport=global-base");
                             sleep_mode.enter(restore_route, selection.file_name.clone());
                             sleep_wake_guard.begin_sleep_entry();
                             sleep_wake_guard_started_at = Some(Instant::now());
@@ -777,7 +1142,6 @@ mod firmware {
                             );
                             panel.sleep()?;
                             state.panel_awake = false;
-                            state.partial_refreshes = 0;
                             info!(
                                 "rustmix-wave=sleep-mode-enter image={} restore-route={} display=global-refresh panel=deep-sleep aldo3=off wifi=off network-services=paused mcu-sleep=false",
                                 selection.file_name,
@@ -847,6 +1211,7 @@ mod firmware {
                                     &mut panel,
                                     &mut frame,
                                     &mut state,
+                                    &mut panel_refresh,
                                     RefreshRequest::Normal,
                                 )?;
                             }
@@ -863,6 +1228,7 @@ mod firmware {
                                     &mut panel,
                                     &mut frame,
                                     &mut state,
+                                    &mut panel_refresh,
                                     RefreshRequest::Normal,
                                 )?;
                             }
@@ -879,7 +1245,13 @@ mod firmware {
                             ScreenRoute::Weather | ScreenRoute::WeatherDetails
                         )
                     {
-                        refresh_screen(&mut panel, &mut frame, &mut state, RefreshRequest::Normal)?;
+                        refresh_screen(
+                            &mut panel,
+                            &mut frame,
+                            &mut state,
+                            &mut panel_refresh,
+                            RefreshRequest::Normal,
+                        )?;
                     }
                 }
             }
@@ -920,6 +1292,14 @@ mod firmware {
                     }
                     ReaderTickOutcome::None => {}
                 }
+                apply_wifi_transfer_ui_request(
+                    &mut wifi_transfer_server,
+                    &mut state,
+                    &mut storage_browser,
+                    _mounted_sd.is_some(),
+                    voice_recording.is_some(),
+                    voice_playback.is_some(),
+                );
                 log_reader_persistence_event(&mut state);
                 if state.panel_awake
                     && (outcome == ReaderTickOutcome::LoadingStageChanged
@@ -927,10 +1307,57 @@ mod firmware {
                         || outcome == ReaderTickOutcome::Failed
                         || state.active_route() != previous_route)
                 {
-                    refresh_screen(&mut panel, &mut frame, &mut state, RefreshRequest::Normal)?;
+                    refresh_screen(
+                        &mut panel,
+                        &mut frame,
+                        &mut state,
+                        &mut panel_refresh,
+                        RefreshRequest::Normal,
+                    )?;
                     last_activity = Instant::now();
                 }
                 last_reader_tick = Instant::now();
+            }
+
+            if !sleep_mode.is_sleeping()
+                && state.panel_awake
+                && (state.active_route() == ScreenRoute::MotionEvents
+                    || state.lua_game_needs_imu_events())
+                && last_imu_event_sample.elapsed()
+                    >= Duration::from_millis(IMU_EVENT_SAMPLE_INTERVAL_MS)
+            {
+                match board_services.read_imu_motion() {
+                    Ok(reading) => {
+                        let now_ms = imu_event_started_at.elapsed().as_millis() as u64;
+                        let event = state.update_imu_event_sample(reading, now_ms);
+                        if let Some(event) = event {
+                            info!("rustmix-wave=imu-event type={} detail={} at-ms={} samples={} counts=tilt:{},shake:{},rotate:{},level:{} thresholds=tilt:{}mg,shake:{}mg,rotate:{}dps,level:{}mg,debounce:{}ms", event.kind.marker(), event.kind.detail_marker(), event.at_ms, state.imu_events.samples, state.imu_events.counters.tilt, state.imu_events.counters.shake, state.imu_events.counters.rotate, state.imu_events.counters.level, state.imu_events.thresholds.tilt_enter_mg, state.imu_events.thresholds.shake_delta_mg, state.imu_events.thresholds.rotate_dps, state.imu_events.thresholds.level_tolerance_mg, state.imu_events.thresholds.debounce_ms);
+                        }
+                        let game_motion_changed =
+                            event.is_some_and(|event| state.apply_lua_game_motion_event(event));
+                        if game_motion_changed {
+                            log_lua_runtime_events(&mut state);
+                        }
+                        let diagnostic_refresh = state.active_route() == ScreenRoute::MotionEvents
+                            && (event.is_some()
+                                || last_imu_event_screen_refresh.elapsed()
+                                    >= Duration::from_secs(IMU_EVENT_SCREEN_REFRESH_SECONDS));
+                        if game_motion_changed || diagnostic_refresh {
+                            refresh_screen(
+                                &mut panel,
+                                &mut frame,
+                                &mut state,
+                                &mut panel_refresh,
+                                RefreshRequest::Normal,
+                            )?;
+                            last_imu_event_screen_refresh = Instant::now();
+                        }
+                    }
+                    Err(error) => {
+                        warn!("rustmix-wave=imu-event-sample status=unavailable error={error:#}")
+                    }
+                }
+                last_imu_event_sample = Instant::now();
             }
 
             let live_refresh_seconds = match state.active_route() {
@@ -944,7 +1371,13 @@ mod firmware {
             {
                 state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
                 log_board_snapshot(state.board, state.regional);
-                refresh_screen(&mut panel, &mut frame, &mut state, RefreshRequest::Normal)?;
+                refresh_screen(
+                    &mut panel,
+                    &mut frame,
+                    &mut state,
+                    &mut panel_refresh,
+                    RefreshRequest::Normal,
+                )?;
                 info!(
                     "rustmix-wave=sample-board-status-auto-refresh route={}",
                     state.active_route().marker()
@@ -952,48 +1385,155 @@ mod firmware {
                 last_status_refresh = Instant::now();
             }
 
-            if back_button.poll(&mut button_delay)? {
-                info!(
-                    "rustmix-wave=boot-button event=long-press action=back hold-ms={BOOT_BACK_LONG_PRESS_MS}"
-                );
-                if sleep_mode.is_sleeping() {
-                    info!("rustmix-wave=sleep-mode-input-suppressed event=boot-long-press-back");
-                    FreeRtos::delay_ms(20);
-                    continue;
-                }
-                let woke_from_sleep = !state.panel_awake;
-                if woke_from_sleep {
-                    panel.initialize()?;
-                    state.panel_awake = true;
-                    state.partial_refreshes = 0;
-                }
-                state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
-                log_board_snapshot(state.board, state.regional);
-                let previous_route = state.active_route();
-                if previous_route == ScreenRoute::Home {
-                    info!("rustmix-wave=hierarchical-back outcome=ignored route=home");
-                } else {
-                    state.back();
+            match back_button.poll(&mut button_delay)? {
+                Some(BootButtonEvent::LongPress) => {
                     info!(
-                        "rustmix-wave=hierarchical-back outcome=navigated from={} to={}",
-                        previous_route.marker(),
-                        state.active_route().marker()
+                        "rustmix-wave=boot-button event=long-press action=back hold-ms={BOOT_BACK_LONG_PRESS_MS}"
                     );
-                    info!(
-                        "rustmix-wave=screen-route route={}",
-                        state.active_route().marker()
-                    );
-                }
-                if woke_from_sleep || state.active_route() != previous_route {
-                    let request = if woke_from_sleep {
-                        RefreshRequest::ForceGlobalAfterWake
+                    if sleep_mode.is_sleeping() {
+                        info!(
+                            "rustmix-wave=sleep-mode-input-suppressed event=boot-long-press-back"
+                        );
+                        FreeRtos::delay_ms(20);
+                        continue;
+                    }
+                    let woke_from_sleep = !state.panel_awake;
+                    if woke_from_sleep {
+                        panel.initialize()?;
+                        state.panel_awake = true;
+                        panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
+                        sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
+                    }
+                    state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
+                    log_board_snapshot(state.board, state.regional);
+                    let previous_route = state.active_route();
+                    if previous_route == ScreenRoute::Home {
+                        info!("rustmix-wave=hierarchical-back outcome=ignored route=home");
                     } else {
-                        RefreshRequest::Normal
-                    };
-                    refresh_screen(&mut panel, &mut frame, &mut state, request)?;
+                        state.back();
+                        apply_voice_notes_ui_request(
+                            &mut voice_recording,
+                            &mut voice_playback,
+                            &mut audio_runtime,
+                            &mut state,
+                            _mounted_sd.is_some(),
+                        );
+                        apply_wifi_transfer_ui_request(
+                            &mut wifi_transfer_server,
+                            &mut state,
+                            &mut storage_browser,
+                            _mounted_sd.is_some(),
+                            voice_recording.is_some(),
+                            voice_playback.is_some(),
+                        );
+                        log_lua_runtime_events(&mut state);
+                        info!(
+                            "rustmix-wave=hierarchical-back outcome=navigated from={} to={}",
+                            previous_route.marker(),
+                            state.active_route().marker()
+                        );
+                        info!(
+                            "rustmix-wave=screen-route route={}",
+                            state.active_route().marker()
+                        );
+                    }
+                    if woke_from_sleep || state.active_route() != previous_route {
+                        let request = if woke_from_sleep {
+                            RefreshRequest::ForceGlobalAfterWake
+                        } else {
+                            RefreshRequest::Normal
+                        };
+                        refresh_screen(
+                            &mut panel,
+                            &mut frame,
+                            &mut state,
+                            &mut panel_refresh,
+                            request,
+                        )?;
+                    }
+                    last_activity = Instant::now();
+                    last_status_refresh = Instant::now();
                 }
-                last_activity = Instant::now();
-                last_status_refresh = Instant::now();
+                Some(BootButtonEvent::ShortPress) => {
+                    info!(
+                        "rustmix-wave=boot-button event=short-press action=contextual-navigation"
+                    );
+                    if sleep_mode.is_sleeping() {
+                        info!("rustmix-wave=sleep-mode-input-suppressed event=boot-short-press-contextual-navigation");
+                        FreeRtos::delay_ms(20);
+                        continue;
+                    }
+                    let calendar_agenda_context = state.apply_calendar_boot_short_press();
+                    let keyboard_context = if calendar_agenda_context {
+                        false
+                    } else {
+                        state.apply_keyboard_boot_short_press()
+                    };
+                    let lua_game_context = if calendar_agenda_context || keyboard_context {
+                        false
+                    } else {
+                        state.apply_lua_game_boot_short_press()
+                    };
+                    if calendar_agenda_context || keyboard_context || lua_game_context {
+                        if calendar_agenda_context {
+                            info!("rustmix-wave=calendar-agenda route=selected-day outcome=opened");
+                        }
+                        if keyboard_context {
+                            if state.active_route() == ScreenRoute::CalendarEventEditor {
+                                if let Some(editor) = state.calendar.editor.as_ref() {
+                                    info!(
+                                        "rustmix-wave=calendar-editor-keyboard-nav axis={} outcome=toggled",
+                                        editor.navigation_mode_label()
+                                    );
+                                }
+                            } else if state.active_route() == ScreenRoute::VoiceNoteDetails
+                                && state.voice_notes.title_editing
+                            {
+                                info!(
+                                    "rustmix-wave=voice-note-title-keyboard-nav axis={} outcome=toggled",
+                                    state.voice_notes.title_editor_navigation_mode_label()
+                                );
+                            } else {
+                                info!(
+                                    "rustmix-wave=dictionary-keyboard-nav axis={} outcome=toggled",
+                                    state.dictionary.navigation_mode_label()
+                                );
+                            }
+                        }
+                        let woke_from_sleep = !state.panel_awake;
+                        if woke_from_sleep {
+                            panel.initialize()?;
+                            state.panel_awake = true;
+                            panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
+                            sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
+                        }
+                        state.update_board_snapshot(
+                            board_services.read_snapshot(&mut service_delay),
+                        );
+                        log_board_snapshot(state.board, state.regional);
+                        log_lua_runtime_events(&mut state);
+                        let request = if woke_from_sleep {
+                            RefreshRequest::ForceGlobalAfterWake
+                        } else {
+                            RefreshRequest::Normal
+                        };
+                        refresh_screen(
+                            &mut panel,
+                            &mut frame,
+                            &mut state,
+                            &mut panel_refresh,
+                            request,
+                        )?;
+                        last_activity = Instant::now();
+                        last_status_refresh = Instant::now();
+                    } else {
+                        info!(
+                            "rustmix-wave=boot-button event=short-press action=ignored route={}",
+                            state.active_route().marker()
+                        );
+                    }
+                }
+                None => {}
             }
 
             if let Some(event) = buttons.poll(&mut button_delay)? {
@@ -1007,7 +1547,8 @@ mod firmware {
                 if woke_from_sleep {
                     panel.initialize()?;
                     state.panel_awake = true;
-                    state.partial_refreshes = 0;
+                    panel_refresh.reset_after_external_global(PanelGlobalReason::AfterWake);
+                    sync_panel_refresh_diagnostics(&mut state, &panel_refresh);
                 }
 
                 state.update_board_snapshot(board_services.read_snapshot(&mut service_delay));
@@ -1049,12 +1590,33 @@ mod firmware {
                     }
                 } else {
                     state.apply(event);
+                    log_lua_runtime_events(&mut state);
                     if state.active_route() == ScreenRoute::Files {
                         storage_browser.refresh();
                         state.update_storage_snapshot(storage_browser.snapshot());
                         log_storage_snapshot(&state.storage);
                     }
                 }
+                // Consume Settings > Network transfer start/stop intents before
+                // rendering the next frame.  This guarantees that the transfer
+                // route shows READY plus its LAN URL and code on the same normal
+                // partial refresh that follows the SELECT event.
+                apply_calendar_ui_request(&mut state, _mounted_sd.is_some());
+                apply_voice_notes_ui_request(
+                    &mut voice_recording,
+                    &mut voice_playback,
+                    &mut audio_runtime,
+                    &mut state,
+                    _mounted_sd.is_some(),
+                );
+                apply_wifi_transfer_ui_request(
+                    &mut wifi_transfer_server,
+                    &mut state,
+                    &mut storage_browser,
+                    _mounted_sd.is_some(),
+                    voice_recording.is_some(),
+                    voice_playback.is_some(),
+                );
                 log_reader_persistence_event(&mut state);
                 if state.display != previous_display {
                     match state.display.save_to_path(DISPLAY_CONFIG_PATH) {
@@ -1078,20 +1640,191 @@ mod firmware {
                     );
                 }
                 let reader_clear_ghost = state.take_reader_clear_ghost_request();
+                let power_key_clear_ghost = state.take_power_key_manual_refresh_request();
                 let request = if woke_from_sleep {
                     RefreshRequest::ForceGlobalAfterWake
-                } else if reader_clear_ghost {
+                } else if reader_clear_ghost || power_key_clear_ghost {
                     RefreshRequest::ForceGlobalManual
                 } else {
                     RefreshRequest::Normal
                 };
-                refresh_screen(&mut panel, &mut frame, &mut state, request)?;
+                refresh_screen(
+                    &mut panel,
+                    &mut frame,
+                    &mut state,
+                    &mut panel_refresh,
+                    request,
+                )?;
                 last_activity = Instant::now();
                 last_status_refresh = Instant::now();
             }
 
             FreeRtos::delay_ms(20);
         }
+    }
+
+    fn apply_calendar_ui_request(state: &mut AppState, mounted: bool) {
+        let Some(request) = state.take_calendar_request() else {
+            return;
+        };
+        if !mounted {
+            state.calendar.fail("SD card unavailable");
+            warn!(
+                "rustmix-wave=calendar-personal-event-write status=rejected reason=sd-unavailable"
+            );
+            return;
+        }
+        let root = std::path::Path::new(CALENDAR_ROOT);
+        let outcome = match request {
+            CalendarUiRequest::CreatePersonal { date, title, detail } => {
+                create_personal_event(root, date, &title, &detail).map(|()| {
+                    info!("rustmix-wave=calendar-personal-event-write status=completed operation=create title={title}");
+                    "Personal event created"
+                })
+            }
+            CalendarUiRequest::UpdatePersonal {
+                source_row,
+                title,
+                detail,
+            } => update_personal_event(root, source_row, &title, &detail).map(|()| {
+                info!("rustmix-wave=calendar-personal-event-write status=completed operation=edit source-row={source_row} title={title}");
+                "Personal event updated"
+            }),
+            CalendarUiRequest::DeletePersonal { source_row } => {
+                delete_personal_event(root, source_row).map(|()| {
+                    info!("rustmix-wave=calendar-personal-event-write status=completed operation=delete source-row={source_row}");
+                    "Personal event deleted"
+                })
+            }
+        };
+        match outcome {
+            Ok(message) => {
+                state.calendar.refresh_events();
+                state.calendar.mark_persistence_completed(message);
+                state.router.navigate_to(ScreenRoute::CalendarAgenda);
+            }
+            Err(error) => {
+                state.calendar.fail(format!("{error:#}"));
+                warn!("rustmix-wave=calendar-personal-event-write status=failed error={error:#}");
+            }
+        }
+    }
+
+    fn maintain_wifi_transfer_server(
+        server: &mut Option<WifiTransferServer>,
+        state: &mut AppState,
+        storage_browser: &mut StorageBrowser,
+        mounted: bool,
+    ) {
+        let stop_reason = server.as_ref().and_then(|active| {
+            if state.network.wifi_state != WifiConnectionState::Connected {
+                Some("wifi-loss")
+            } else if active.is_expired() {
+                Some("inactivity-timeout")
+            } else {
+                None
+            }
+        });
+        if let Some(reason) = stop_reason {
+            stop_wifi_transfer_server(server, state, storage_browser, mounted, reason);
+        } else if let Some(active) = server.as_ref() {
+            let snapshot = active.snapshot();
+            if snapshot != state.wifi_transfer {
+                state.update_wifi_transfer_snapshot(snapshot);
+            }
+        }
+    }
+
+    fn apply_wifi_transfer_ui_request(
+        server: &mut Option<WifiTransferServer>,
+        state: &mut AppState,
+        storage_browser: &mut StorageBrowser,
+        mounted: bool,
+        voice_recording_active: bool,
+        voice_playback_active: bool,
+    ) {
+        let Some(request) = state.take_wifi_transfer_request() else {
+            return;
+        };
+        match request {
+            WifiTransferUiRequest::Start => {
+                info!(
+                    "rustmix-wave=wifi-transfer-ui-request request=start dispatch=before-refresh"
+                );
+                if voice_recording_active {
+                    state.update_wifi_transfer_snapshot(WifiTransferSnapshot::failed(
+                        "Voice recording is active; stop recording before Wi-Fi transfer",
+                    ));
+                    warn!("rustmix-wave=wifi-transfer-server status=rejected reason=voice-recording-active");
+                    return;
+                }
+                if voice_playback_active {
+                    state.update_wifi_transfer_snapshot(WifiTransferSnapshot::failed(
+                        "Voice-note playback is active; stop playback before Wi-Fi transfer",
+                    ));
+                    warn!("rustmix-wave=wifi-transfer-server status=rejected reason=voice-note-playback-active");
+                    return;
+                }
+                if server.is_some() {
+                    return;
+                }
+                state.update_wifi_transfer_snapshot(WifiTransferSnapshot::starting());
+                let Some(ipv4) = state.network.ipv4_address.as_deref() else {
+                    state.update_wifi_transfer_snapshot(WifiTransferSnapshot::failed(
+                        "Connect Wi-Fi before starting transfer",
+                    ));
+                    warn!("rustmix-wave=wifi-transfer-server status=start-rejected reason=wifi-not-connected");
+                    return;
+                };
+                let code = format!("{:06}", unsafe { sys::esp_random() } % 1_000_000);
+                info!("rustmix-wave=wifi-transfer-server status=starting ipv4={ipv4} port=80 root={WIFI_TRANSFER_ROOT} stack-bytes={WIFI_TRANSFER_SERVER_STACK_BYTES}");
+                log_runtime_memory("before-wifi-transfer-start");
+                match WifiTransferServer::start(ipv4, code) {
+                    Ok(active) => {
+                        state.update_wifi_transfer_snapshot(active.snapshot());
+                        *server = Some(active);
+                        log_runtime_memory("after-wifi-transfer-start");
+                    }
+                    Err(error) => {
+                        warn!(
+                            "rustmix-wave=wifi-transfer-server status=start-failed error={error:#}"
+                        );
+                        state.update_wifi_transfer_snapshot(WifiTransferSnapshot::failed(format!(
+                            "{error:#}"
+                        )));
+                    }
+                }
+            }
+            WifiTransferUiRequest::Stop => {
+                info!("rustmix-wave=wifi-transfer-ui-request request=stop dispatch=before-refresh");
+                stop_wifi_transfer_server(
+                    server,
+                    state,
+                    storage_browser,
+                    mounted,
+                    "settings-toggle",
+                );
+            }
+        }
+    }
+
+    fn stop_wifi_transfer_server(
+        server: &mut Option<WifiTransferServer>,
+        state: &mut AppState,
+        storage_browser: &mut StorageBrowser,
+        mounted: bool,
+        reason: &'static str,
+    ) {
+        if server.take().is_some() {
+            info!("rustmix-wave=wifi-transfer-server status=stopped reason={reason}");
+            log_runtime_memory("after-wifi-transfer-stop");
+        }
+        state.update_wifi_transfer_snapshot(WifiTransferSnapshot::default());
+        state.refresh_lua_app_catalog(mounted);
+        state.reader.refresh_library();
+        state.calendar.refresh_events();
+        storage_browser.refresh();
+        state.update_storage_snapshot(storage_browser.snapshot());
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -1172,7 +1905,7 @@ mod firmware {
             attempt.cause, attempt_label, config.provider, config.location
         );
         state.weather.mark_fetching();
-        match fetch_open_meteo(config) {
+        match fetch_open_meteo_on_worker(config) {
             Ok(data) => {
                 retry.clear();
                 state.weather.record_success(data);
@@ -1361,6 +2094,335 @@ mod firmware {
         log_audio_snapshot(&state.audio);
     }
 
+    fn sd_available_bytes(path: &str) -> Option<u64> {
+        let path = CString::new(path).ok()?;
+        let mut total_bytes = 0_u64;
+        let mut free_bytes = 0_u64;
+        if unsafe { sys::esp_vfs_fat_info(path.as_ptr(), &mut total_bytes, &mut free_bytes) }
+            != sys::ESP_OK
+        {
+            return None;
+        }
+        Some(free_bytes)
+    }
+
+    fn refresh_voice_note_storage_available(state: &mut AppState, mounted: bool) {
+        let available = mounted
+            .then(|| sd_available_bytes(SD_MOUNT_POINT))
+            .flatten();
+        state.voice_notes.set_available_storage_bytes(available);
+    }
+
+    fn stop_voice_note_playback<'d, I2C>(
+        session: &mut Option<VoicePlaybackSession>,
+        audio_runtime: &mut Option<AudioRuntime<'d, I2C>>,
+        state: &mut AppState,
+        reason: &str,
+    ) where
+        I2C: embedded_hal::i2c::I2c,
+        I2C::Error: core::fmt::Debug,
+    {
+        let Some(active) = session.take() else {
+            return;
+        };
+        let file_name = active.file_name().to_string();
+        if let Some(runtime) = audio_runtime.as_mut() {
+            if let Err(error) = runtime.finish_voice_note_playback() {
+                warn!("rustmix-wave=voice-note-playback status=stop-failed file={file_name} reason={reason} error={error:#}");
+                runtime.record_failure(format!("{error:#}"));
+            }
+            state.update_audio_snapshot(runtime.snapshot());
+            log_audio_snapshot(&state.audio);
+        }
+        state.voice_notes.stop_playback();
+        info!("rustmix-wave=voice-note-playback status=stopped file={file_name} reason={reason}");
+    }
+
+    fn apply_voice_notes_ui_request<'d, I2C>(
+        session: &mut Option<VoiceRecordingSession>,
+        playback: &mut Option<VoicePlaybackSession>,
+        audio_runtime: &mut Option<AudioRuntime<'d, I2C>>,
+        state: &mut AppState,
+        mounted: bool,
+    ) where
+        I2C: embedded_hal::i2c::I2c,
+        I2C::Error: core::fmt::Debug,
+    {
+        let Some(request) = state.take_voice_notes_request() else {
+            return;
+        };
+        match request {
+            VoiceNotesUiRequest::StartRecording => {
+                if !mounted {
+                    state.voice_notes.fail("SD card unavailable");
+                    warn!("rustmix-wave=voice-record status=rejected reason=sd-unavailable");
+                    return;
+                }
+                if state.wifi_transfer.is_active() {
+                    state
+                        .voice_notes
+                        .fail("Stop Wi-Fi Transfer before recording");
+                    warn!("rustmix-wave=voice-record status=rejected reason=wifi-transfer-active");
+                    return;
+                }
+                if state.alarms.active.is_some() {
+                    state.voice_notes.fail("Alarm active");
+                    warn!("rustmix-wave=voice-record status=rejected reason=active-alarm");
+                    return;
+                }
+                if playback.is_some() {
+                    stop_voice_note_playback(playback, audio_runtime, state, "recording-start");
+                }
+                let Some(runtime) = audio_runtime.as_mut() else {
+                    state.voice_notes.fail("Microphone unavailable");
+                    warn!("rustmix-wave=voice-record status=rejected reason=audio-unavailable");
+                    return;
+                };
+                if session.is_some() {
+                    return;
+                }
+                let recorded_at = state
+                    .board
+                    .rtc
+                    .map(|rtc| state.regional.localize_rtc(rtc).date_time())
+                    .unwrap_or_else(|| VOICE_UNKNOWN_RECORDED_AT.into());
+                log_runtime_memory("before-voice-record");
+                match VoiceRecordingSession::start_with_recorded_at(
+                    std::path::Path::new(VOICE_NOTES_ROOT),
+                    recorded_at.clone(),
+                ) {
+                    Ok(created) => {
+                        if let Err(error) = runtime.begin_voice_recording() {
+                            let _ = created.cancel();
+                            state.voice_notes.fail(format!("{error:#}"));
+                            warn!("rustmix-wave=voice-record status=failed stage=audio-start error={error:#}");
+                            return;
+                        }
+                        let file_name = created.file_name().to_string();
+                        state
+                            .voice_notes
+                            .begin_recording(file_name.clone(), recorded_at.clone());
+                        *session = Some(created);
+                        log_runtime_memory("after-voice-record-start");
+                        info!("rustmix-wave=voice-record status=starting file={} recorded-at={} sample-rate=16000 bits=16 channels=1 chunk-bytes={} capture=cooperative-bounded-i2s-rx mic-gain={}", file_name, recorded_at, VOICE_PCM_MONO_CHUNK_BYTES, state.voice_notes.mic_gain.marker());
+                    }
+                    Err(error) => {
+                        state.voice_notes.fail(format!("{error:#}"));
+                        warn!("rustmix-wave=voice-record status=failed stage=storage-start error={error:#}");
+                    }
+                }
+            }
+            VoiceNotesUiRequest::StopRecording => {
+                let Some(active) = session.take() else {
+                    return;
+                };
+                match active.finalize() {
+                    Ok(entry) => {
+                        if let Some(runtime) = audio_runtime.as_mut() {
+                            let _ = runtime.finish_voice_recording();
+                            state.update_audio_snapshot(runtime.snapshot());
+                        }
+                        info!("rustmix-wave=voice-record status=completed file={} recorded-at={} duration-seconds={} pcm-bytes={} wav-bytes={}", entry.file_name, entry.recorded_at, entry.duration_seconds, entry.pcm_bytes, entry.wav_bytes);
+                        state.voice_notes.complete_recording(entry);
+                        state.refresh_voice_notes_catalog();
+                        refresh_voice_note_storage_available(state, mounted);
+                        log_runtime_memory("after-voice-record-stop");
+                    }
+                    Err(error) => {
+                        if let Some(runtime) = audio_runtime.as_mut() {
+                            let _ = runtime.finish_voice_recording();
+                            state.update_audio_snapshot(runtime.snapshot());
+                        }
+                        state.voice_notes.fail(format!("{error:#}"));
+                        warn!("rustmix-wave=voice-record status=failed stage=finalize error={error:#}");
+                        log_runtime_memory("after-voice-record-stop");
+                    }
+                }
+            }
+            VoiceNotesUiRequest::PauseRecording => {
+                if session.is_some() {
+                    state.voice_notes.pause_recording();
+                    info!("rustmix-wave=voice-record status=paused");
+                }
+            }
+            VoiceNotesUiRequest::ResumeRecording => {
+                if session.is_some() {
+                    state.voice_notes.resume_recording();
+                    info!("rustmix-wave=voice-record status=resumed");
+                }
+            }
+            VoiceNotesUiRequest::CancelRecording => {
+                if let Some(active) = session.take() {
+                    let _ = active.cancel();
+                }
+                if let Some(runtime) = audio_runtime.as_mut() {
+                    let _ = runtime.finish_voice_recording();
+                    state.update_audio_snapshot(runtime.snapshot());
+                }
+                state.voice_notes.cancel_recording();
+                refresh_voice_note_storage_available(state, mounted);
+                info!("rustmix-wave=voice-record status=cancelled");
+            }
+            VoiceNotesUiRequest::StartPlayback => {
+                if !mounted {
+                    state.voice_notes.fail("SD card unavailable");
+                    warn!("rustmix-wave=voice-note-playback status=rejected reason=sd-unavailable");
+                    return;
+                }
+                if session.is_some() {
+                    state.voice_notes.fail("Stop recording before playback");
+                    warn!("rustmix-wave=voice-note-playback status=rejected reason=voice-recording-active");
+                    return;
+                }
+                if state.wifi_transfer.is_active() {
+                    state
+                        .voice_notes
+                        .fail("Stop Wi-Fi Transfer before playback");
+                    warn!("rustmix-wave=voice-note-playback status=rejected reason=wifi-transfer-active");
+                    return;
+                }
+                if state.alarms.active.is_some() {
+                    state.voice_notes.fail("Alarm active");
+                    warn!("rustmix-wave=voice-note-playback status=rejected reason=active-alarm");
+                    return;
+                }
+                let Some(file_name) = state
+                    .voice_notes
+                    .selected_note()
+                    .map(|note| note.file_name.clone())
+                else {
+                    state.voice_notes.fail("No voice note selected");
+                    warn!("rustmix-wave=voice-note-playback status=rejected reason=no-selection");
+                    return;
+                };
+                if audio_runtime.is_none() {
+                    state.voice_notes.fail("Speaker unavailable");
+                    warn!(
+                        "rustmix-wave=voice-note-playback status=rejected reason=audio-unavailable"
+                    );
+                    return;
+                }
+                if playback.is_some() {
+                    stop_voice_note_playback(playback, audio_runtime, state, "replace-selection");
+                }
+                match VoicePlaybackSession::open(std::path::Path::new(VOICE_NOTES_ROOT), &file_name)
+                {
+                    Ok(created) => {
+                        let total_pcm_bytes = created.total_pcm_bytes();
+                        let runtime = audio_runtime
+                            .as_mut()
+                            .expect("audio runtime checked before playback start");
+                        if let Err(error) = runtime.begin_voice_note_playback() {
+                            runtime.record_failure(format!(
+                                "Voice-note playback start failed: {error:#}"
+                            ));
+                            state.update_audio_snapshot(runtime.snapshot());
+                            state.voice_notes.fail(format!("{error:#}"));
+                            warn!("rustmix-wave=voice-note-playback status=failed stage=audio-start file={file_name} error={error:#}");
+                            return;
+                        }
+                        state
+                            .voice_notes
+                            .begin_playback(file_name.clone(), total_pcm_bytes);
+                        *playback = Some(created);
+                        state.update_audio_snapshot(runtime.snapshot());
+                        log_audio_snapshot(&state.audio);
+                        info!("rustmix-wave=voice-note-playback status=starting file={file_name} pcm-bytes={total_pcm_bytes} sample-rate=16000 bits=16 source-channels=1 output-channels=2 chunk-bytes={VOICE_PCM_MONO_CHUNK_BYTES} volume={}", state.audio.volume_percent);
+                    }
+                    Err(error) => {
+                        state.voice_notes.fail(format!("{error:#}"));
+                        warn!("rustmix-wave=voice-note-playback status=failed stage=storage-open file={file_name} error={error:#}");
+                    }
+                }
+            }
+            VoiceNotesUiRequest::StopPlayback => {
+                stop_voice_note_playback(playback, audio_runtime, state, "ui-stop");
+            }
+            VoiceNotesUiRequest::PersistMicGain(mic_gain) => {
+                let preferences = VoiceNotesPreferences { mic_gain };
+                match save_voice_notes_preferences(std::path::Path::new(VOICE_NOTES_ROOT), preferences) {
+                    Ok(()) => info!("rustmix-wave=voice-note-settings-write status=completed mic-gain={} path={VOICE_NOTES_ROOT}/SETTINGS.TXT", mic_gain.marker()),
+                    Err(error) => {
+                        state.voice_notes.fail(format!("{error:#}"));
+                        warn!("rustmix-wave=voice-note-settings-write status=failed mic-gain={} error={error:#}", mic_gain.marker());
+                    }
+                }
+            }
+            VoiceNotesUiRequest::SaveEditedTitle { file_name, title } => {
+                match save_voice_note_title(
+                    std::path::Path::new(VOICE_NOTES_ROOT),
+                    &file_name,
+                    &title,
+                ) {
+                    Ok(()) => {
+                        state.refresh_voice_notes_catalog();
+                        info!("rustmix-wave=voice-note-title-write status=completed file={file_name} title={title}");
+                    }
+                    Err(error) => {
+                        state.voice_notes.fail(format!("{error:#}"));
+                        warn!("rustmix-wave=voice-note-title-write status=failed file={file_name} error={error:#}");
+                    }
+                }
+            }
+            VoiceNotesUiRequest::ExportSelected => {
+                if !mounted {
+                    state.voice_notes.fail("SD card unavailable");
+                    warn!("rustmix-wave=voice-note-export status=rejected reason=sd-unavailable");
+                    return;
+                }
+                if session.is_some() {
+                    state.voice_notes.fail("Stop recording before export");
+                    warn!("rustmix-wave=voice-note-export status=rejected reason=voice-recording-active");
+                    return;
+                }
+                if playback.is_some() {
+                    stop_voice_note_playback(playback, audio_runtime, state, "export-note");
+                }
+                let Some(file_name) = state
+                    .voice_notes
+                    .selected_note()
+                    .map(|note| note.file_name.clone())
+                else {
+                    state.voice_notes.fail("No voice note selected");
+                    return;
+                };
+                state.voice_notes.mark_export_requested(file_name.clone());
+                state.request_wifi_transfer_start();
+                info!("rustmix-wave=voice-note-export status=requested file={file_name} portal-path=VOICE/{file_name}");
+            }
+            VoiceNotesUiRequest::DeleteSelected => {
+                if playback.is_some() {
+                    stop_voice_note_playback(playback, audio_runtime, state, "delete-note");
+                }
+                let selected = state
+                    .voice_notes
+                    .selected_note()
+                    .map(|note| note.file_name.clone());
+                if let Some(file_name) = selected {
+                    match delete_voice_note(std::path::Path::new(VOICE_NOTES_ROOT), &file_name) {
+                        Ok(()) => {
+                            state.voice_notes.remove_selected_note();
+                            state.refresh_voice_notes_catalog();
+                            refresh_voice_note_storage_available(state, mounted);
+                            state.router.navigate_to(ScreenRoute::VoiceNotes);
+                            info!(
+                                "rustmix-wave=voice-note-delete status=completed file={file_name} confirmation=accepted"
+                            );
+                        }
+                        Err(error) => {
+                            state.voice_notes.fail(format!("{error:#}"));
+                            warn!("rustmix-wave=voice-note-delete status=failed file={file_name} error={error:#}");
+                        }
+                    }
+                }
+            }
+            VoiceNotesUiRequest::RefreshCatalog => {
+                state.refresh_voice_notes_catalog();
+                refresh_voice_note_storage_available(state, mounted);
+            }
+        }
+    }
+
     fn sync_alarm_hardware<I2C>(
         engine: &mut AlarmEngine,
         board_services: &mut BoardServices<I2C>,
@@ -1434,12 +2496,15 @@ mod firmware {
         Normal,
         ForceGlobalAfterWake,
         ForceGlobalManual,
+        #[allow(dead_code)]
+        ForceGlobalSafetyFallback,
     }
 
     fn refresh_screen<SPI, DC, RST, CS, BUSY, DELAY, POWER>(
         panel: &mut Epaper397<SPI, DC, RST, CS, BUSY, DELAY, POWER>,
         frame: &mut FrameBuffer,
         state: &mut AppState,
+        coordinator: &mut PanelRefreshCoordinator,
         request: RefreshRequest,
     ) -> Result<()>
     where
@@ -1456,31 +2521,56 @@ mod firmware {
         DELAY: DelayNs,
         POWER: waveshare_epd397_rust_app::power::PanelPower,
     {
-        let force_global_after_wake = request == RefreshRequest::ForceGlobalAfterWake;
-        let force_global_manual = request == RefreshRequest::ForceGlobalManual;
-        let use_global_refresh = force_global_after_wake
-            || force_global_manual
-            || state.partial_refreshes >= PARTIAL_REFRESH_LIMIT;
-        state.partial_refreshes = if use_global_refresh {
-            0
-        } else {
-            state.partial_refreshes + 1
+        let coordinator_request = match request {
+            RefreshRequest::Normal => PanelRefreshRequest::Normal,
+            RefreshRequest::ForceGlobalAfterWake => PanelRefreshRequest::AfterWake,
+            RefreshRequest::ForceGlobalManual => PanelRefreshRequest::ManualGhostCleanup,
+            RefreshRequest::ForceGlobalSafetyFallback => PanelRefreshRequest::SafetyFallback,
         };
+        let plan = coordinator.plan(coordinator_request);
+        sync_panel_refresh_diagnostics(state, coordinator);
         render_current_screen(frame, state)?;
 
-        if use_global_refresh {
-            panel.show_base(frame.as_bytes())?;
-            if force_global_after_wake {
-                info!("rustmix-wave=wake-global-refresh");
-            } else if force_global_manual {
-                info!("rustmix-wave=reader-clear-ghosting refresh=global-base");
-            } else {
-                info!("rustmix-wave=global-refresh-after-partials");
+        match plan {
+            PanelRefreshPlan::GlobalBase { reason } => {
+                panel.show_base(frame.as_bytes())?;
+                info!(
+                    "rustmix-wave=panel-refresh plan=global-base reason={} transport=global-base",
+                    reason.marker()
+                );
+                match reason {
+                    PanelGlobalReason::AfterWake => info!("rustmix-wave=wake-global-refresh"),
+                    PanelGlobalReason::ManualGhostCleanup => {
+                        info!("rustmix-wave=reader-clear-ghosting refresh=global-base");
+                        info!("rustmix-wave=power-key-clear-ghosting refresh=global-base")
+                    }
+                    PanelGlobalReason::PeriodicCleanup => {
+                        info!("rustmix-wave=global-refresh-after-partials")
+                    }
+                    PanelGlobalReason::SafetyFallback => {
+                        warn!("rustmix-wave=panel-refresh safety-fallback refresh=global-base")
+                    }
+                    PanelGlobalReason::InitialBoot | PanelGlobalReason::SleepImage => {}
+                }
             }
-        } else {
-            panel.show_partial_fullscreen(frame.as_bytes())?;
+            PanelRefreshPlan::PartialFullscreen { partial_count } => {
+                panel.show_partial_fullscreen(frame.as_bytes())?;
+                info!(
+                    "rustmix-wave=panel-refresh plan=partial-fullscreen reason=normal partial-count={partial_count} partial-limit={PANEL_PARTIAL_REFRESH_LIMIT} transport=existing-fullscreen-partial"
+                );
+            }
         }
         Ok(())
+    }
+
+    fn sync_panel_refresh_diagnostics(state: &mut AppState, coordinator: &PanelRefreshCoordinator) {
+        state.partial_refreshes = coordinator.partial_count();
+    }
+
+    fn log_lua_runtime_events(state: &mut AppState) {
+        for line in state.take_lua_runtime_diagnostics() {
+            info!("{line}");
+        }
     }
 
     fn log_reader_persistence_event(state: &mut AppState) {

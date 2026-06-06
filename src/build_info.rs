@@ -11,17 +11,17 @@ pub const PRODUCT_SLUG: &str = "rustmix-wave-epd397";
 /// Cargo semantic version for the current firmware package.
 pub const FIRMWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Stable milestone identifier for acceptance logs and diagnostics.
-pub const UI_SHELL_MILESTONE: &str = "reader-eink-font-pack";
+pub const UI_SHELL_MILESTONE: &str = "text-editor-layout-alignment";
 
 #[cfg(test)]
 mod tests {
     use super::{FIRMWARE_VERSION, PRODUCT_NAME, PRODUCT_SLUG, UI_SHELL_MILESTONE};
 
     #[test]
-    fn exposes_reader_eink_font_pack_metadata() {
+    fn exposes_text_editor_layout_alignment_metadata() {
         assert_eq!(PRODUCT_NAME, "Rustmix Wave / EPD397");
         assert_eq!(PRODUCT_SLUG, "rustmix-wave-epd397");
-        assert_eq!(FIRMWARE_VERSION, "0.17.2");
-        assert_eq!(UI_SHELL_MILESTONE, "reader-eink-font-pack");
+        assert_eq!(FIRMWARE_VERSION, "1.0.0");
+        assert_eq!(UI_SHELL_MILESTONE, "text-editor-layout-alignment");
     }
 }

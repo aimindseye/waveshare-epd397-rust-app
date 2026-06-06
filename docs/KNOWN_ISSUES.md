@@ -2,36 +2,27 @@
 
 ## Weather provider reliability
 
-Physical testing has observed intermittent Open-Meteo failures:
-
-```text
-HTTP 502
-TLS EOF
-HTTP response timeout
-ESP_ERR_HTTP_CONNECT
-```
-
-The device-side resilience layer is active:
-
-- initial request plus three retries
-- event-loop scheduled `2`, `5`, and `15` second backoff
-- retry handling for TLS, transport, timeout and HTTP `429`, `500`, `502`, `503`, `504`
-- last-known-good in-memory forecast retention
-- `RETRYING` and `STALE` UI states
-
-When no successful fetch has occurred since boot, Weather may still show `Weather unavailable` after retries are exhausted. This issue is currently on hold while provider-path behavior is observed.
+Open-Meteo requests can fail transiently with transport, TLS, timeout, or HTTP service errors. The device already applies bounded retries, delayed backoff, and last-known-good in-memory retention. A cold boot with no successful fetch may still end in a readable `Weather unavailable` state.
 
 ## MCU deep sleep
 
-Sleep-image mode powers down the panel rail and pauses network services, but the MCU event loop remains active. This preserves PMIC Power-key polling and the physically validated GPIO45 RTC-alarm path. MCU deep sleep is deferred to a separate milestone.
+Sleep-image mode suspends network services, sleeps the e-paper panel, and disables the panel rail, but the MCU event loop remains active. This preserves validated AXP2101 Power-key polling and GPIO45 RTC-alarm handling. Full MCU deep sleep remains deferred.
 
-## Voice Notes
+## EPUB scope
 
-Audio playback is active, but microphone RX capture is deferred. `Productivity > Voice Notes` remains a placeholder.
+Reader supports bounded reflowable text extraction, TOC navigation, bookmarks, and resume. CSS layout, images, hyperlinks, footnotes, fixed-layout EPUB, DRM, ZIP64, and SD-backed EPUB anchor caches remain deferred.
 
-## Deferred applications and Reader work
+## Calendar scope
 
-Reader TXT and bounded reflowable EPUB opening, Continue Reading, Recent, bookmarks, Reader Preferences and EPUB TOC navigation are active. Deferred Reader work includes EPUB CSS layout, images, hyperlinks, footnotes, fixed-layout EPUB, DRM and SD-backed EPUB anchor caches. The remaining placeholder apps are:
+Calendar personal events and U.S. holidays are active. U.S. holiday rows remain read-only. Calendar reminders do not automatically create RTC alarms. Non-U.S. calendar packs are intentionally excluded from the native Calendar route.
 
-- Dictionary
-- Games TBD
+## Dictionary scope
+
+Dictionary exact and prefix lookup is active through the complete X4 pack. Saved words, search history, and Reader word-selection lookup remain deferred.
+
+## Merged factory-image release artifact
+
+The supported release artifact is the ESP-IDF ELF flashed through `espflash flash`.
+Raw-address flashing with `espflash write-bin` is intentionally unsupported. A
+merged factory image remains deferred until the bootloader, partition-table, and
+application offsets have been validated on physical hardware.

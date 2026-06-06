@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-./scripts/validate_source_contract.sh
+./scripts/validate.sh
 
 VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
 if [[ -z "$VERSION" ]]; then
@@ -28,7 +28,11 @@ rsync -a ./ "$TMP/waveshare-epd397-rust-app/" \
   --exclude '*.pyc' \
   --exclude '*.bak' \
   --exclude '*.orig' \
-  --exclude '*.rej'
+  --exclude '*.rej' \
+  --exclude '*.zip' \
+  --exclude '*.sha256' \
+  --exclude 'waveshare-epd397-rust-*-repair-*/' \
+  --exclude 'waveshare-epd397-rust-*-v*/'
 
 rm -f "$OUT" "$OUT.sha256"
 (
@@ -37,8 +41,12 @@ rm -f "$OUT" "$OUT.sha256"
 )
 (
   cd dist
-  shasum -a 256 "$(basename "$OUT")" > "$(basename "$OUT").sha256"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$(basename "$OUT")" > "$(basename "$OUT").sha256"
+  else
+    sha256sum "$(basename "$OUT")" > "$(basename "$OUT").sha256"
+  fi
 )
 
-echo "release-zip=$OUT"
-echo "release-sha256=$OUT.sha256"
+echo "release-source-zip=$OUT"
+echo "release-source-sha256=$OUT.sha256"

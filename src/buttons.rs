@@ -88,10 +88,17 @@ where
     }
 }
 
-/// Dedicated active-low GPIO0 BOOT-button adapter for hierarchical Back.
+/// Dedicated active-low GPIO0 BOOT-button adapter.
 ///
-/// A long press is intentionally isolated from the three regular UI keys so
-/// category lists no longer need synthetic `Back to Home` rows.
+/// Long presses remain hierarchy-level Back. Short presses are surfaced so
+/// route-specific features such as Sudoku axis selection can use BOOT without
+/// changing Back behavior elsewhere.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootButtonEvent {
+    ShortPress,
+    LongPress,
+}
+
 pub struct LongPressBackButton<BACK> {
     back: BACK,
 }
@@ -106,23 +113,28 @@ where
         Self { back }
     }
 
-    /// Return `true` once after a complete active-low BOOT hold and release.
-    pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<bool> {
+    /// Return one BOOT release classified as short or long.
+    pub fn poll<D: DelayNs>(&mut self, delay: &mut D) -> Result<Option<BootButtonEvent>> {
         if !self.is_pressed()? {
-            return Ok(false);
+            return Ok(None);
         }
         delay.delay_ms(DEBOUNCE_MS);
         if !self.is_pressed()? {
-            return Ok(false);
+            return Ok(None);
         }
-        delay.delay_ms(BOOT_BACK_LONG_PRESS_MS.saturating_sub(DEBOUNCE_MS));
-        if !self.is_pressed()? {
-            return Ok(false);
-        }
+
+        let mut held_ms = DEBOUNCE_MS;
         while self.is_pressed()? {
+            if held_ms >= BOOT_BACK_LONG_PRESS_MS {
+                while self.is_pressed()? {
+                    delay.delay_ms(10);
+                }
+                return Ok(Some(BootButtonEvent::LongPress));
+            }
             delay.delay_ms(10);
+            held_ms = held_ms.saturating_add(10);
         }
-        Ok(true)
+        Ok(Some(BootButtonEvent::ShortPress))
     }
 
     fn is_pressed(&mut self) -> Result<bool> {

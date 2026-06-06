@@ -9,7 +9,7 @@ use core::fmt::Debug;
 use anyhow::{anyhow, bail, Result};
 use embedded_hal::i2c::I2c;
 
-use crate::power_key::{short_press_from_irq_status, PowerKeyEvent, POWER_KEY_SHORT_PRESS_MASK};
+use crate::power_key::{power_key_event_from_irq_status, PowerKeyEvent, POWER_KEY_EVENT_MASK};
 
 const AXP2101_ADDRESS: u8 = 0x34;
 const STATUS1: u8 = 0x00;
@@ -113,24 +113,26 @@ where
         self.update_bits(ADC_CHANNEL_CTRL, 1 << 0, true)
     }
 
-    /// Enable AXP2101 short power-key press reporting and clear any stale
-    /// latched short-press status before the event loop starts.
-    pub fn initialize_power_key_short_press(&mut self) -> Result<()> {
+    /// Enable AXP2101 short- and long-press Power-key reporting and clear any
+    /// stale key status before the event loop starts.
+    pub fn initialize_power_key_events(&mut self) -> Result<()> {
         self.verify_present()?;
-        self.update_bits(INTEN2, POWER_KEY_SHORT_PRESS_MASK, true)?;
-        self.write_register(INTSTS2, POWER_KEY_SHORT_PRESS_MASK)
+        self.update_bits(INTEN2, POWER_KEY_EVENT_MASK, true)?;
+        self.write_register(INTSTS2, POWER_KEY_EVENT_MASK)
     }
 
-    /// Read and clear one latched AXP2101 short power-key event.
+    /// Read and clear one latched AXP2101 Power-key event. Long press takes
+    /// priority when both sticky bits are present.
     ///
     /// The status register is write-one-to-clear. Unrelated PMIC IRQ status bits
     /// are deliberately preserved for later isolated milestones.
     pub fn take_power_key_event(&mut self) -> Result<Option<PowerKeyEvent>> {
         self.verify_present()?;
         let status2 = self.read_register(INTSTS2)?;
-        let event = short_press_from_irq_status(status2);
-        if event.is_some() {
-            self.write_register(INTSTS2, POWER_KEY_SHORT_PRESS_MASK)?;
+        let event = power_key_event_from_irq_status(status2);
+        let latched_key_bits = status2 & POWER_KEY_EVENT_MASK;
+        if latched_key_bits != 0 {
+            self.write_register(INTSTS2, latched_key_bits)?;
         }
         Ok(event)
     }

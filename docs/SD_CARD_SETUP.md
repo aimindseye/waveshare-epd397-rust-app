@@ -1,33 +1,51 @@
 # SD-card setup
 
-Use a FAT-formatted SD card. The firmware mounts it at `/sdcard` and expects the following removable-storage layout:
+Use a FAT-formatted SD card. Rustmix Wave mounts it at `/sdcard` and expects the following product tree:
 
 ```text
 /RUSTMIX/
-├── WIFI.TXT
-├── WEATHER.TXT
-├── ALARMS.TXT
-├── DISPLAY.TXT
-└── SLEEP/
-    ├── SLEEP.BMP
-    └── *.BMP
+  WIFI.TXT
+  WEATHER.TXT
+  ALARMS.TXT
+  DISPLAY.TXT
+  BOOKS/
+  READER/
+    CACHE/
+  VOICE/
+  SLEEP/
+    *.BMP
+  APPS/
+    HGRID/
+    SUDOKU/
+    MINES/
+    TILTMAZE/
+    M2048/
+    SOKOBAN/
+    DICT/
+      INDEX.TXT
+      DATA/*.JSN
+    CALENDAR/
+      EVENTS.TXT
+      US2026.TXT
 ```
 
-## Install example files
+## Install bundled examples
 
 ```bash
 ./scripts/install-sd-examples.sh /Volumes/YOUR_SD_CARD
 ```
 
-Existing files are preserved by default. To overwrite existing example paths intentionally:
+Existing paths are preserved by default. Use `--force` only when deliberately replacing bundled example files:
 
 ```bash
 ./scripts/install-sd-examples.sh --force /Volumes/YOUR_SD_CARD
 ```
 
+The generic installer preserves an existing Dictionary and Calendar tree. Use the dedicated installers for intentional complete-pack replacement.
+
 ## Wi-Fi
 
-Copy `examples/sd-card/RUSTMIX/WIFI.TXT.example` to `/RUSTMIX/WIFI.TXT` and edit locally:
+Copy or edit `/RUSTMIX/WIFI.TXT`:
 
 ```text
 ssid=YOUR_NETWORK
@@ -36,11 +54,11 @@ timezone=America/New_York
 ntp_server=pool.ntp.org
 ```
 
-Do not commit a real password.
+Do not commit real credentials.
 
 ## Weather
 
-Copy `examples/sd-card/RUSTMIX/WEATHER.TXT.example` to `/RUSTMIX/WEATHER.TXT`:
+Optional `/RUSTMIX/WEATHER.TXT` example:
 
 ```text
 provider=open-meteo
@@ -51,11 +69,9 @@ timezone=America/New_York
 refresh_minutes=30
 ```
 
-Weather is optional. Missing or failing Weather configuration does not block panel boot.
-
 ## Alarms
 
-Copy `examples/sd-card/RUSTMIX/ALARMS.TXT.example` to `/RUSTMIX/ALARMS.TXT`:
+Optional `/RUSTMIX/ALARMS.TXT` example:
 
 ```text
 snooze_minutes=10
@@ -64,88 +80,99 @@ alarm=Weekend,09:00,weekends,off,recurring
 alarm=Appointment,16:45,2026-06-10,on,once
 ```
 
-The UI can edit schedules during the active session. Persistent alarm edits remain SD-file based.
+Calendar personal events remain separate from alarms.
 
-## Display
+## Display preferences
 
-Copy `examples/sd-card/RUSTMIX/DISPLAY.TXT.example` to `/RUSTMIX/DISPLAY.TXT`:
-
-```text
-font_family=inter
-font_size=standard
-```
-
-Supported values:
+`/RUSTMIX/DISPLAY.TXT` supports:
 
 ```text
 font_family=inter|atkinson-hyperlegible
 font_size=compact|standard|large
 ```
 
-Display changes are saved back to this file by the Settings screen.
-
 ## Sleep images
 
-Native sleep images must be:
+Files below `/RUSTMIX/SLEEP` must be uncompressed monochrome Windows BMP files:
 
 ```text
 800 × 480
-1-bpp monochrome Windows BMP
-uncompressed
+1-bpp
 ```
 
-Install the bundled samples only:
+Install bundled samples:
 
 ```bash
 ./scripts/install-sleep-images.sh /Volumes/YOUR_SD_CARD
 ```
 
+## Reader books and state
 
-## Reader books
+Copy TXT, EPUB, or FAT-friendly `.EPU` books into:
 
-Create `/RUSTMIX/BOOKS` and copy TXT or ordinary reflowable EPUB books into it. v0.17.0 renders `.TXT`, `.EPUB`, and FAT-friendly `.EPU` books. EPUB CSS layout, images, DRM and fixed-layout packages remain deferred.
+```text
+/RUSTMIX/BOOKS
+```
 
-
-## Reader-owned state
-
-The firmware creates `/RUSTMIX/READER` and `/RUSTMIX/READER/CACHE` automatically after the first TXT page opens. Do not hand-edit active Reader state while the device is running.
+The device creates Reader state automatically:
 
 ```text
 /RUSTMIX/READER/STATE.TXT
+/RUSTMIX/READER/POSITS.TXT
 /RUSTMIX/READER/RECENT.TXT
 /RUSTMIX/READER/MARKS.TXT
 /RUSTMIX/READER/PREFS.TXT
 /RUSTMIX/READER/CACHE/<8HEX>.CCH
 ```
 
-Reader writes use temporary and backup siblings (`.TMP`, `.BAK`) so an interrupted update can recover on the next boot.
+Reader writes use `.TMP` and `.BAK` siblings for recovery.
 
-## Reader preferences
+## Voice Notes
 
-`PREFS.TXT` is created automatically after the first Reader preference change. Supported values:
-
-```text
-version=1
-theme=classic|high-contrast
-orientation=portrait|landscape
-font_size=small|medium|large|xlarge
-book_font=inter|atkinson-hyperlegible|serif
-show_progress=true|false
-```
-
-## Reader per-book resume state
-
-The Reader creates `/RUSTMIX/READER/POSITS.TXT` automatically when books are opened. It stores a bounded map of last-read source-byte anchors for previously opened books.
-
-## FAT 8.3-safe Reader persistence filenames
-
-The Reader writes per-book progress to `/RUSTMIX/READER/POSITS.TXT`. Cache files use exactly eight hexadecimal basename characters such as `/RUSTMIX/READER/CACHE/ED9B69AF.CCH`. Temporary and backup siblings use `.TMP` and `.BAK`. Legacy `POSITIONS.TXT` is read-only migration input when the short-name-safe primary is absent.
-
-## Reader runtime files after v0.16.7
+The device creates:
 
 ```text
-/RUSTMIX/READER/POSITS.TXT
-/RUSTMIX/READER/CACHE/<8HEX>.CCH
+/RUSTMIX/VOICE/VOICE###.WAV
+/RUSTMIX/VOICE/INDEX.TXT
+/RUSTMIX/VOICE/META.TXT
+/RUSTMIX/VOICE/SETTINGS.TXT
 ```
 
-Generated Reader cache basenames are exactly eight hexadecimal characters and do not use a leading prefix.
+Do not hand-edit sidecars while the device is active.
+
+## Complete Dictionary pack
+
+Install from a local `rustmix-x4-firmware` checkout:
+
+```bash
+./scripts/install-dictionary-x4-pack.sh \
+  --force \
+  --x4-repo /Users/piyushdaiya/Documents/projects/rustmix-x4-firmware \
+  /Volumes/YOUR_SD_CARD
+```
+
+Verify representative lookups:
+
+```bash
+./scripts/verify-dictionary-x4-pack.sh /Volumes/YOUR_SD_CARD
+```
+
+## U.S.-only Calendar pack
+
+Install from a local X4 checkout:
+
+```bash
+./scripts/install-calendar-x4-pack.sh \
+  --force \
+  --x4-repo /Users/piyushdaiya/Documents/projects/rustmix-x4-firmware \
+  /Volumes/YOUR_SD_CARD
+```
+
+The installer includes `EVENTS.TXT` and `US2026.TXT`, and explicitly excludes `HINDU26.TXT`.
+
+Calendar personal-event writes use:
+
+```text
+EVENTS.TMP -> EVENTS.TXT
+EVENTS.BAK retained for rollback
+```

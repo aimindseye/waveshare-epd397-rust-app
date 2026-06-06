@@ -6,3 +6,4 @@ cd "$ROOT"
 
 cargo +stable fmt --all -- --check
 ./scripts/validate_source_contract.sh
+./scripts/test-host.sh
